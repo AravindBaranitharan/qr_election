@@ -208,6 +208,65 @@ button:disabled {
   font-weight: 700;
 }
 
+.status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.status-head h2 {
+  margin: 0;
+}
+
+.status-pill {
+  margin: 0;
+  border-radius: 999px;
+  padding: 5px 11px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.pill-live {
+  background: #e0f4ff;
+  color: #146da2;
+}
+
+.pill-over {
+  background: #ffe8e6;
+  color: #ad2e2c;
+}
+
+.admin-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  gap: 8px;
+}
+
+.status-tile {
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+}
+
+.status-tile small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.74rem;
+  margin-bottom: 5px;
+}
+
+.status-tile strong,
+.status-tile time {
+  display: block;
+  color: #11314a;
+  font-size: 0.94rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 .card pre {
   margin: 0;
   white-space: pre-wrap;
