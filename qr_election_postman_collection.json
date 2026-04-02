@@ -14,6 +14,10 @@
       "value": "5"
     },
     {
+      "key": "batchId",
+      "value": "replace_with_batch_id_from_generate_response"
+    },
+    {
       "key": "tokenHex",
       "value": "replace_with_token_from_generate_response"
     }
@@ -139,6 +143,44 @@
           "path": [
             "s",
             "{{tokenHex}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Batch Manifest",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/batch/{{batchId}}/manifest.json",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "batch",
+            "{{batchId}}",
+            "manifest.json"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Batch Download Zip",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/batch/{{batchId}}/download.zip",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "batch",
+            "{{batchId}}",
+            "download.zip"
           ]
         }
       },

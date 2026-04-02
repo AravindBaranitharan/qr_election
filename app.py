@@ -1,14 +1,16 @@
 import hashlib
 import hmac
+import io
 import json
 import os
 import secrets
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
 import qrcode
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -90,6 +92,25 @@ def load_state():
 
 def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def resolve_batch_dir(batch_id):
+    if len(batch_id) != BATCH_ID_BYTES * 2:
+        return None
+
+    try:
+        bytes.fromhex(batch_id)
+    except ValueError:
+        return None
+
+    output_root = OUTPUT_ROOT.resolve()
+    batch_dir = (OUTPUT_ROOT / batch_id).resolve()
+
+    if output_root not in batch_dir.parents:
+        return None
+    if not batch_dir.exists() or not batch_dir.is_dir():
+        return None
+    return batch_dir
 
 
 def token_fingerprint(token_hex):
@@ -235,7 +256,7 @@ def serve_frontend_index():
 
 @app.after_request
 def disable_api_caching(response):
-    if request.path.startswith(("/generate", "/status", "/scan", "/s", "/c", "/claim")):
+    if request.path.startswith(("/generate", "/status", "/scan", "/s", "/c", "/claim", "/batch")):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -286,6 +307,7 @@ def generate(count=None):
     for serial in range(1, count + 1):
         token_hex = create_token(batch_id, serial)
         claim_url = f"{base_url}/c/{token_hex}"
+        image_url = f"{base_url}/batch/{batch_id}/qr/{serial}.png"
         image_path = output_dir / f"qr_{serial:04d}.png"
 
         qr = qrcode.QRCode(
@@ -303,6 +325,7 @@ def generate(count=None):
                 "serial": serial,
                 "hex": token_hex,
                 "claim_url": claim_url,
+                "image_url": image_url,
                 "file": str(image_path.resolve()),
             }
         )
@@ -333,10 +356,61 @@ def generate(count=None):
             "generated_at": state["generated_at"],
             "domain_name": base_url,
             "batch_id": batch_id,
+            "download_url": f"{base_url}/batch/{batch_id}/download.zip",
+            "manifest_url": f"{base_url}/batch/{batch_id}/manifest.json",
             "output_dir": str(output_dir.resolve()),
             "manifest_file": str(manifest_file.resolve()),
             "items": items,
         }
+    )
+
+
+@app.get("/batch/<batch_id>/manifest.json")
+def batch_manifest(batch_id):
+    batch_dir = resolve_batch_dir(batch_id)
+    if not batch_dir:
+        return jsonify({"true": False, "message": "batch not found"}), 404
+
+    manifest = batch_dir / "manifest.json"
+    if not manifest.exists():
+        return jsonify({"true": False, "message": "manifest not found"}), 404
+    return send_file(manifest, mimetype="application/json")
+
+
+@app.get("/batch/<batch_id>/qr/<int:serial>.png")
+def batch_qr_image(batch_id, serial):
+    batch_dir = resolve_batch_dir(batch_id)
+    if not batch_dir:
+        return jsonify({"true": False, "message": "batch not found"}), 404
+    if serial <= 0:
+        return jsonify({"true": False, "message": "invalid serial"}), 400
+
+    image_path = batch_dir / f"qr_{serial:04d}.png"
+    if not image_path.exists():
+        return jsonify({"true": False, "message": "qr image not found"}), 404
+    return send_file(image_path, mimetype="image/png")
+
+
+@app.get("/batch/<batch_id>/download.zip")
+def batch_download_zip(batch_id):
+    batch_dir = resolve_batch_dir(batch_id)
+    if not batch_dir:
+        return jsonify({"true": False, "message": "batch not found"}), 404
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for image_path in sorted(batch_dir.glob("qr_*.png")):
+            zf.write(image_path, arcname=image_path.name)
+        manifest = batch_dir / "manifest.json"
+        if manifest.exists():
+            zf.write(manifest, arcname="manifest.json")
+
+    archive.seek(0)
+    return send_file(
+        archive,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"qr_batch_{batch_id}.zip",
     )
 
 
