@@ -178,6 +178,7 @@ function LandingScannerScreen() {
     <main className="app-shell">
       <section className="card compact">
         <h1>QR Scan</h1>
+        <p className="muted">Scan QR and get instant OK or Not Accepted.</p>
         <div className="camera-wrap">
           <video ref={videoRef} muted playsInline />
           {!cameraReady && !cameraError && <p className="camera-overlay">Opening camera...</p>}
@@ -192,11 +193,13 @@ function LandingScannerScreen() {
 function SuperAdminScreen() {
   const [count, setCount] = useState('17')
   const [batchIdInput, setBatchIdInput] = useState('')
+  const [batches, setBatches] = useState([])
   const [status, setStatus] = useState(null)
   const [batchData, setBatchData] = useState(null)
   const [manifestData, setManifestData] = useState(null)
   const [loadingGenerate, setLoadingGenerate] = useState(false)
   const [loadingManifest, setLoadingManifest] = useState(false)
+  const [loadingBatches, setLoadingBatches] = useState(false)
   const [error, setError] = useState('')
 
   async function loadStatus() {
@@ -209,8 +212,32 @@ function SuperAdminScreen() {
     }
   }
 
+  async function loadBatches(preferredBatchId = '') {
+    setLoadingBatches(true)
+    try {
+      const response = await fetch('/batches', { cache: 'no-store' })
+      const data = await response.json()
+      const items = Array.isArray(data?.items) ? data.items : []
+      setBatches(items)
+
+      const fallbackBatchId =
+        String(preferredBatchId || '').trim() ||
+        String(data?.active_batch_id || '').trim() ||
+        String(items[0]?.batch_id || '').trim()
+
+      if (fallbackBatchId) {
+        setBatchIdInput((current) => (current ? current : fallbackBatchId))
+      }
+    } catch (batchError) {
+      setError(String(batchError))
+    } finally {
+      setLoadingBatches(false)
+    }
+  }
+
   useEffect(() => {
     loadStatus()
+    loadBatches()
   }, [])
 
   async function generateBatch(event) {
@@ -230,6 +257,7 @@ function SuperAdminScreen() {
       setBatchData(data)
       setBatchIdInput(data.batch_id || '')
       await loadStatus()
+      await loadBatches(data.batch_id || '')
     } catch (generateError) {
       setError(String(generateError))
     } finally {
@@ -260,9 +288,13 @@ function SuperAdminScreen() {
 
   return (
     <main className="admin-shell">
-      <section className="card compact">
+      <section className="card compact hero-card">
+        <p className="badge">Control Panel</p>
         <h1>Superadmin</h1>
-        <p className="muted">Generate QR batches and download all files from here.</p>
+        <p className="muted">Generate QR batches and manage ZIP download from one place.</p>
+        <a className="logout-link" href="/superadmin/logout">
+          Logout
+        </a>
       </section>
 
       {status && (
@@ -330,17 +362,33 @@ function SuperAdminScreen() {
         <form className="admin-form" onSubmit={fetchManifest}>
           <label htmlFor="batchId">Batch ID</label>
           <div className="row">
-            <input
+            <select
               id="batchId"
               value={batchIdInput}
               onChange={(event) => setBatchIdInput(event.target.value)}
-              placeholder="e.g. 8161f717"
-            />
+            >
+              <option value="">
+                {loadingBatches ? 'Loading batches...' : 'Select batch'}
+              </option>
+              {batches.map((batch) => (
+                <option key={batch.batch_id} value={batch.batch_id}>
+                  {batch.name || `Batch ${batch.batch_id}`}
+                </option>
+              ))}
+            </select>
             <button type="submit" disabled={loadingManifest}>
               {loadingManifest ? 'Loading...' : 'Load'}
             </button>
           </div>
         </form>
+        <button
+          type="button"
+          className="secondary-btn"
+          onClick={() => loadBatches(batchIdInput)}
+          disabled={loadingBatches}
+        >
+          {loadingBatches ? 'Refreshing list...' : 'Refresh Batch List'}
+        </button>
 
         {activeBatchId && (
           <div className="admin-links">
