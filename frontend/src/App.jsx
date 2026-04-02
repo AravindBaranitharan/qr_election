@@ -10,6 +10,13 @@ function isSuperAdminPath() {
   return window.location.pathname === '/superadmin' || window.location.pathname.startsWith('/superadmin/')
 }
 
+function formatTimestamp(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
 function extractToken(rawValue) {
   const value = String(rawValue || '').trim()
   if (!value) return null
@@ -258,6 +265,47 @@ function SuperAdminScreen() {
         <p className="muted">Generate QR batches and download all files from here.</p>
       </section>
 
+      {status && (
+        <section className="card compact">
+          <div className="status-head">
+            <h2>Current Status</h2>
+            <p className={`status-pill ${status?.over ? 'pill-over' : 'pill-live'}`}>
+              {status?.over ? 'Over' : 'Live'}
+            </p>
+          </div>
+          <div className="admin-status-grid">
+            <article className="status-tile">
+              <small>Active Batch ID</small>
+              <strong>{status?.active_batch_id || '-'}</strong>
+            </article>
+            <article className="status-tile">
+              <small>Total QR</small>
+              <strong>{status?.total_qr ?? 0}</strong>
+            </article>
+            <article className="status-tile">
+              <small>Accepted</small>
+              <strong>{status?.true_count ?? 0}</strong>
+            </article>
+            <article className="status-tile">
+              <small>Remaining</small>
+              <strong>{status?.remaining ?? 0}</strong>
+            </article>
+            <article className="status-tile">
+              <small>Used Count</small>
+              <strong>{status?.used_count ?? 0}</strong>
+            </article>
+            <article className="status-tile">
+              <small>Generated At</small>
+              <time>{formatTimestamp(status?.generated_at)}</time>
+            </article>
+            <article className="status-tile">
+              <small>Updated At</small>
+              <time>{formatTimestamp(status?.updated_at)}</time>
+            </article>
+          </div>
+        </section>
+      )}
+
       <section className="card compact">
         <h2>Create Batch</h2>
         <form className="admin-form" onSubmit={generateBatch}>
@@ -308,13 +356,6 @@ function SuperAdminScreen() {
           </div>
         )}
       </section>
-
-      {status && (
-        <section className="card compact">
-          <h2>Current Status</h2>
-          <pre>{JSON.stringify(status, null, 2)}</pre>
-        </section>
-      )}
 
       {batchData && (
         <section className="card compact">
