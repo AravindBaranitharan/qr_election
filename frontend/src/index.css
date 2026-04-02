@@ -41,6 +41,14 @@ body {
   gap: 14px;
 }
 
+.admin-shell {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
 .card {
   background: var(--card);
   border: 1px solid var(--stroke);
@@ -136,6 +144,82 @@ p {
   color: #ad2e2c;
 }
 
+.admin-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.admin-form label {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+input {
+  width: 100%;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  padding: 11px 12px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: #fff;
+}
+
+input:focus {
+  outline: 2px solid #8bc9ef;
+  outline-offset: 1px;
+}
+
+button {
+  border: 0;
+  border-radius: 12px;
+  padding: 11px 16px;
+  background: linear-gradient(120deg, #0b75b7, #1d92cf);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+}
+
+button:disabled {
+  opacity: 0.7;
+}
+
+.admin-links {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.admin-links a {
+  display: block;
+  text-decoration: none;
+  color: #0a5a8a;
+  background: #edf8ff;
+  border: 1px solid #bfddf2;
+  padding: 10px;
+  border-radius: 10px;
+  font-weight: 700;
+}
+
+.card pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+  color: #0f2f4a;
+  background: #f4fbff;
+  border: 1px solid #d2e7f5;
+  border-radius: 12px;
+  padding: 12px;
+}
+
 .camera-wrap {
   margin-top: 10px;
   position: relative;
@@ -168,6 +252,12 @@ p {
   margin-top: 10px;
   color: #a0312d;
   font-size: 0.88rem;
+}
+
+.error-box {
+  border-color: #eaa3a0;
+  background: #fff0ef;
+  color: #912a27;
 }
 
 .scan-card {

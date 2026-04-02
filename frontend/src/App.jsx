@@ -6,6 +6,10 @@ function readTokenFromPath() {
   return match ? match[1].toLowerCase() : null
 }
 
+function isSuperAdminPath() {
+  return window.location.pathname === '/superadmin' || window.location.pathname.startsWith('/superadmin/')
+}
+
 function extractToken(rawValue) {
   const value = String(rawValue || '').trim()
   if (!value) return null
@@ -89,28 +93,17 @@ function SubmitOnlyScreen({ token }) {
   )
 }
 
-function ScannerScreen() {
+function LandingScannerScreen() {
   const videoRef = useRef(null)
   const scannerRef = useRef(null)
   const busyRef = useRef(false)
   const cooldownRef = useRef({ token: '', at: 0 })
 
-  const [status, setStatus] = useState(null)
   const [result, setResult] = useState(null)
   const [scanError, setScanError] = useState('')
   const [cameraError, setCameraError] = useState('')
   const [cameraReady, setCameraReady] = useState(false)
   const [loading, setLoading] = useState(false)
-
-  async function refreshStatus() {
-    try {
-      const response = await fetch('/status', { cache: 'no-store' })
-      const data = await response.json()
-      setStatus(data)
-    } catch (statusError) {
-      setScanError(String(statusError))
-    }
-  }
 
   async function handleToken(token) {
     const now = Date.now()
@@ -126,7 +119,6 @@ function ScannerScreen() {
       const response = await fetch(`/s/${token}`, { method: 'POST', cache: 'no-store' })
       const data = await response.json()
       setResult(data)
-      await refreshStatus()
     } catch (submitError) {
       setScanError(String(submitError))
     } finally {
@@ -134,12 +126,6 @@ function ScannerScreen() {
       busyRef.current = false
     }
   }
-
-  useEffect(() => {
-    refreshStatus()
-    const timer = window.setInterval(refreshStatus, 4000)
-    return () => window.clearInterval(timer)
-  }, [])
 
   useEffect(() => {
     let active = true
@@ -185,43 +171,181 @@ function ScannerScreen() {
     <main className="app-shell">
       <section className="card compact">
         <h1>QR Scan</h1>
-        <p className="muted mini">Status from backend</p>
-        <div className="status-grid">
-          <div>
-            <strong>{status?.true_count ?? 0}</strong>
-            <small>Accepted</small>
-          </div>
-          <div>
-            <strong>{status?.total_qr ?? 0}</strong>
-            <small>Total</small>
-          </div>
-          <div>
-            <strong>{status?.remaining ?? 0}</strong>
-            <small>Remaining</small>
-          </div>
-        </div>
-        <p className={`chip ${status?.over ? 'chip-over' : 'chip-live'}`}>
-          {status?.over ? 'Batch Over' : 'Live'}
-        </p>
-      </section>
-
-      <section className="card compact">
-        <h2>Camera</h2>
         <div className="camera-wrap">
           <video ref={videoRef} muted playsInline />
           {!cameraReady && !cameraError && <p className="camera-overlay">Opening camera...</p>}
         </div>
         {cameraError && <p className="error-text">{cameraError}</p>}
       </section>
-
       <ResultCard result={result} error={scanError} loading={loading} />
+    </main>
+  )
+}
+
+function SuperAdminScreen() {
+  const [count, setCount] = useState('17')
+  const [batchIdInput, setBatchIdInput] = useState('')
+  const [status, setStatus] = useState(null)
+  const [batchData, setBatchData] = useState(null)
+  const [manifestData, setManifestData] = useState(null)
+  const [loadingGenerate, setLoadingGenerate] = useState(false)
+  const [loadingManifest, setLoadingManifest] = useState(false)
+  const [error, setError] = useState('')
+
+  async function loadStatus() {
+    try {
+      const response = await fetch('/status', { cache: 'no-store' })
+      const data = await response.json()
+      setStatus(data)
+    } catch (statusError) {
+      setError(String(statusError))
+    }
+  }
+
+  useEffect(() => {
+    loadStatus()
+  }, [])
+
+  async function generateBatch(event) {
+    event.preventDefault()
+    setError('')
+    setLoadingGenerate(true)
+    setManifestData(null)
+    try {
+      const safeCount = Math.max(parseInt(count, 10) || 0, 1)
+      const response = await fetch('/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count: safeCount }),
+        cache: 'no-store',
+      })
+      const data = await response.json()
+      setBatchData(data)
+      setBatchIdInput(data.batch_id || '')
+      await loadStatus()
+    } catch (generateError) {
+      setError(String(generateError))
+    } finally {
+      setLoadingGenerate(false)
+    }
+  }
+
+  async function fetchManifest(event) {
+    event.preventDefault()
+    setError('')
+    setLoadingManifest(true)
+    try {
+      const cleaned = String(batchIdInput || '').trim()
+      if (!cleaned) throw new Error('Enter a batch id first')
+      const response = await fetch(`/batch/${cleaned}/manifest.json?t=${Date.now()}`, { cache: 'no-store' })
+      if (!response.ok) throw new Error(`Manifest request failed (${response.status})`)
+      const data = await response.json()
+      setManifestData(data)
+    } catch (manifestError) {
+      setError(String(manifestError))
+      setManifestData(null)
+    } finally {
+      setLoadingManifest(false)
+    }
+  }
+
+  const activeBatchId = String(batchIdInput || batchData?.batch_id || status?.active_batch_id || '')
+
+  return (
+    <main className="admin-shell">
+      <section className="card compact">
+        <h1>Superadmin</h1>
+        <p className="muted">Generate QR batches and download all files from here.</p>
+      </section>
+
+      <section className="card compact">
+        <h2>Create Batch</h2>
+        <form className="admin-form" onSubmit={generateBatch}>
+          <label htmlFor="count">QR count</label>
+          <div className="row">
+            <input
+              id="count"
+              type="number"
+              min="1"
+              value={count}
+              onChange={(event) => setCount(event.target.value)}
+            />
+            <button type="submit" disabled={loadingGenerate}>
+              {loadingGenerate ? 'Generating...' : 'Generate'}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className="card compact">
+        <h2>Batch Manage</h2>
+        <form className="admin-form" onSubmit={fetchManifest}>
+          <label htmlFor="batchId">Batch ID</label>
+          <div className="row">
+            <input
+              id="batchId"
+              value={batchIdInput}
+              onChange={(event) => setBatchIdInput(event.target.value)}
+              placeholder="e.g. 8161f717"
+            />
+            <button type="submit" disabled={loadingManifest}>
+              {loadingManifest ? 'Loading...' : 'Load'}
+            </button>
+          </div>
+        </form>
+
+        {activeBatchId && (
+          <div className="admin-links">
+            <a href={`/batch/${activeBatchId}/download.zip`} target="_blank" rel="noreferrer">
+              Download ZIP
+            </a>
+            <a href={`/batch/${activeBatchId}/manifest.json`} target="_blank" rel="noreferrer">
+              Open Manifest
+            </a>
+            <a href={`/batch/${activeBatchId}/qr/1.png`} target="_blank" rel="noreferrer">
+              First QR Image
+            </a>
+          </div>
+        )}
+      </section>
+
+      {status && (
+        <section className="card compact">
+          <h2>Current Status</h2>
+          <pre>{JSON.stringify(status, null, 2)}</pre>
+        </section>
+      )}
+
+      {batchData && (
+        <section className="card compact">
+          <h2>Generated Response</h2>
+          <pre>{JSON.stringify(batchData, null, 2)}</pre>
+        </section>
+      )}
+
+      {manifestData && (
+        <section className="card compact">
+          <h2>Manifest Details</h2>
+          <pre>{JSON.stringify(manifestData, null, 2)}</pre>
+        </section>
+      )}
+
+      {error && (
+        <section className="card compact error-box">
+          <p>{error}</p>
+        </section>
+      )}
     </main>
   )
 }
 
 function App() {
   const [token] = useState(() => readTokenFromPath())
-  return token ? <SubmitOnlyScreen token={token} /> : <ScannerScreen />
+  const [superadmin] = useState(() => isSuperAdminPath())
+
+  if (token) return <SubmitOnlyScreen token={token} />
+  if (superadmin) return <SuperAdminScreen />
+  return <LandingScannerScreen />
 }
 
 export default App
