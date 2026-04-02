@@ -287,6 +287,15 @@ def index():
     )
 
 
+@app.get("/superadmin")
+@app.get("/superadmin/<path:path>")
+def superadmin(path=None):
+    frontend = serve_frontend_index()
+    if frontend is not None:
+        return frontend
+    return jsonify({"true": False, "message": "frontend not built"}), 404
+
+
 @app.route("/generate", methods=["POST"])
 @app.route("/generate/<int:count>", methods=["GET"])
 def generate(count=None):
