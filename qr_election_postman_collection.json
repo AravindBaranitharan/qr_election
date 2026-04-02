@@ -1,0 +1,148 @@
+{
+  "info": {
+    "_postman_id": "6a4d6f25-58ae-4fad-a55f-qr-election-collection",
+    "name": "QR Election Flask API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://192.168.31.9:5000"
+    },
+    {
+      "key": "qrCount",
+      "value": "5"
+    },
+    {
+      "key": "tokenHex",
+      "value": "replace_with_token_from_generate_response"
+    }
+  ],
+  "item": [
+    {
+      "name": "Root",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            ""
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "status"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Generate QR Batch - GET",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/generate/{{qrCount}}?t={{$timestamp}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "generate",
+            "{{qrCount}}"
+          ],
+          "query": [
+            {
+              "key": "t",
+              "value": "{{$timestamp}}"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Generate QR Batch - POST",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"count\": {{qrCount}},\n  \"base_url\": \"{{baseUrl}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/generate",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "generate"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Claim Page",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/c/{{tokenHex}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "c",
+            "{{tokenHex}}"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Scan QR - Empty POST",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/s/{{tokenHex}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "s",
+            "{{tokenHex}}"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}
