@@ -58,6 +58,13 @@ body {
   animation: rise 300ms ease-out;
 }
 
+.hero-card {
+  background:
+    radial-gradient(120% 180% at -10% -20%, #fff4c8 0%, transparent 45%),
+    radial-gradient(110% 150% at 110% 120%, #d7ecff 0%, transparent 48%),
+    rgba(255, 255, 255, 0.92);
+}
+
 .compact {
   padding-top: 14px;
   padding-bottom: 14px;
@@ -162,6 +169,7 @@ p {
 }
 
 input {
+  appearance: none;
   width: 100%;
   border: 1px solid var(--stroke);
   border-radius: 12px;
@@ -172,9 +180,22 @@ input {
   background: #fff;
 }
 
-input:focus {
+input:focus,
+select:focus {
   outline: 2px solid #8bc9ef;
   outline-offset: 1px;
+}
+
+select {
+  appearance: none;
+  width: 100%;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  padding: 11px 12px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: #fff;
 }
 
 button {
@@ -189,6 +210,26 @@ button {
 
 button:disabled {
   opacity: 0.7;
+}
+
+.secondary-btn {
+  margin-top: 9px;
+  width: 100%;
+  background: linear-gradient(120deg, #edf7ff, #f7fcff);
+  border: 1px solid #b8d9ef;
+  color: #0f6498;
+}
+
+.logout-link {
+  margin-top: 10px;
+  display: inline-block;
+  font-weight: 700;
+  color: #0c699d;
+  text-decoration: none;
+  background: #edf8ff;
+  border: 1px solid #b8dbef;
+  border-radius: 10px;
+  padding: 7px 11px;
 }
 
 .admin-links {
@@ -206,6 +247,12 @@ button:disabled {
   padding: 10px;
   border-radius: 10px;
   font-weight: 700;
+  transition: transform 130ms ease, box-shadow 130ms ease;
+}
+
+.admin-links a:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 12px rgba(23, 73, 108, 0.08);
 }
 
 .status-head {

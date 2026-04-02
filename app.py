@@ -1,4 +1,5 @@
 import hashlib
+import html
 import hmac
 import io
 import json
@@ -10,7 +11,17 @@ from pathlib import Path
 from threading import Lock
 
 import qrcode
-from flask import Flask, Response, jsonify, request, send_file, send_from_directory
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    redirect,
+    request,
+    send_file,
+    send_from_directory,
+    session,
+    url_for,
+)
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -47,6 +58,8 @@ load_dotenv_file(APP_ROOT / ".env")
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
 SECRET_KEY = os.getenv("QR_SECRET", "replace-this-with-a-long-secret-key")
+SUPERADMIN_PASSWORD = "22012004"
+SUPERADMIN_SESSION_KEY = "superadmin_logged_in"
 STATE_FILE = APP_ROOT / "qr_state.json"
 OUTPUT_ROOT = APP_ROOT / "generated_qr"
 STATE_LOCK = Lock()
@@ -55,6 +68,7 @@ BATCH_ID_BYTES = 4
 SERIAL_BYTES = 4
 NONCE_BYTES = 4
 MAC_BYTES = 8
+app.secret_key = hashlib.sha256(f"{SECRET_KEY}-session".encode("utf-8")).hexdigest()
 
 
 def configured_domain_name():
@@ -254,9 +268,174 @@ def serve_frontend_index():
     return None
 
 
+def is_superadmin_authenticated():
+    return bool(session.get(SUPERADMIN_SESSION_KEY))
+
+
+def build_superadmin_login_page(next_path="/superadmin", error_message=""):
+    safe_next = str(next_path or "/superadmin")
+    if not safe_next.startswith("/superadmin"):
+        safe_next = "/superadmin"
+
+    safe_next_query = html.escape(safe_next, quote=True)
+    safe_error = html.escape(error_message or "", quote=False)
+    error_block = f'<p class="error">{safe_error}</p>' if safe_error else ""
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Superadmin Login</title>
+  <style>
+    :root {{
+      --ink: #11233a;
+      --muted: #4b5d73;
+      --line: rgba(20, 34, 55, 0.16);
+      --card: rgba(255, 255, 255, 0.92);
+      --accent: #0b75b7;
+      --bg1: #fff6dd;
+      --bg2: #e3f3ff;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      color: var(--ink);
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(80% 60% at 0% 0%, #fff5d3 0%, transparent 65%),
+        radial-gradient(70% 80% at 100% 100%, #d9eeff 0%, transparent 70%),
+        linear-gradient(155deg, var(--bg1), var(--bg2));
+    }}
+    .card {{
+      width: min(430px, 100%);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 14px 26px rgba(19, 47, 74, 0.09);
+    }}
+    h1 {{
+      margin: 0 0 8px;
+      font-size: 1.4rem;
+      line-height: 1.2;
+    }}
+    p {{
+      margin: 0 0 12px;
+      color: var(--muted);
+    }}
+    label {{
+      display: block;
+      font-size: 0.87rem;
+      color: var(--muted);
+      margin-bottom: 7px;
+    }}
+    input {{
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 11px 12px;
+      font: inherit;
+      color: var(--ink);
+      margin-bottom: 10px;
+    }}
+    button {{
+      width: 100%;
+      border: 0;
+      border-radius: 12px;
+      padding: 11px 14px;
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      background: linear-gradient(120deg, var(--accent), #1d92cf);
+      cursor: pointer;
+    }}
+    .error {{
+      color: #ad2e2c;
+      background: #ffeceb;
+      border: 1px solid #f1b0ad;
+      border-radius: 10px;
+      padding: 9px 10px;
+      margin-bottom: 10px;
+    }}
+  </style>
+</head>
+<body>
+  <form class="card" method="post" action="/superadmin?next={safe_next_query}">
+    <h1>Superadmin Login</h1>
+    <p>Enter password to open the dashboard.</p>
+    {error_block}
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required autofocus />
+    <button type="submit">Open Dashboard</button>
+  </form>
+</body>
+</html>"""
+
+
+def available_batches():
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    items = []
+
+    for entry in OUTPUT_ROOT.iterdir():
+        if not entry.is_dir():
+            continue
+
+        batch_id = entry.name
+        if len(batch_id) != BATCH_ID_BYTES * 2:
+            continue
+
+        try:
+            bytes.fromhex(batch_id)
+        except ValueError:
+            continue
+
+        total_qr = 0
+        manifest_file = entry / "manifest.json"
+        if manifest_file.exists():
+            try:
+                manifest_items = json.loads(manifest_file.read_text(encoding="utf-8"))
+                if isinstance(manifest_items, list):
+                    total_qr = len(manifest_items)
+            except (OSError, json.JSONDecodeError):
+                total_qr = 0
+
+        updated_at = datetime.fromtimestamp(
+            entry.stat().st_mtime,
+            tz=timezone.utc,
+        ).isoformat()
+        items.append(
+            {
+                "batch_id": batch_id,
+                "name": f"Batch {batch_id} ({total_qr})",
+                "total_qr": total_qr,
+                "updated_at": updated_at,
+            }
+        )
+
+    items.sort(key=lambda batch: batch["updated_at"], reverse=True)
+    return items
+
+
 @app.after_request
 def disable_api_caching(response):
-    if request.path.startswith(("/generate", "/status", "/scan", "/s", "/c", "/claim", "/batch")):
+    if request.path.startswith(
+        (
+            "/generate",
+            "/status",
+            "/scan",
+            "/s",
+            "/c",
+            "/claim",
+            "/batch",
+            "/batches",
+            "/superadmin",
+        )
+    ):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -287,13 +466,73 @@ def index():
     )
 
 
-@app.get("/superadmin")
-@app.get("/superadmin/<path:path>")
-def superadmin(path=None):
+@app.route("/superadmin", methods=["GET", "POST"])
+def superadmin():
+    requested_next = request.args.get("next", "/superadmin")
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        password = (
+            request.form.get("password")
+            or payload.get("password")
+            or ""
+        ).strip()
+
+        if hmac.compare_digest(password, SUPERADMIN_PASSWORD):
+            session[SUPERADMIN_SESSION_KEY] = True
+            safe_next = requested_next if str(requested_next).startswith("/superadmin") else "/superadmin"
+            return redirect(safe_next)
+
+        return (
+            Response(
+                build_superadmin_login_page(
+                    next_path=requested_next,
+                    error_message="Wrong password",
+                ),
+                mimetype="text/html",
+            ),
+            401,
+        )
+
+    if not is_superadmin_authenticated():
+        return Response(
+            build_superadmin_login_page(next_path=requested_next),
+            mimetype="text/html",
+        )
+
     frontend = serve_frontend_index()
     if frontend is not None:
         return frontend
     return jsonify({"true": False, "message": "frontend not built"}), 404
+
+
+@app.get("/superadmin/logout")
+def superadmin_logout():
+    session.pop(SUPERADMIN_SESSION_KEY, None)
+    return redirect(url_for("superadmin"))
+
+
+@app.get("/superadmin/<path:path>")
+def superadmin_spa(path):
+    if not is_superadmin_authenticated():
+        return redirect(url_for("superadmin", next=f"/superadmin/{path}"))
+
+    frontend = serve_frontend_index()
+    if frontend is not None:
+        return frontend
+    return jsonify({"true": False, "message": "frontend not built"}), 404
+
+
+@app.get("/batches")
+def batches():
+    state = load_state()
+    return jsonify(
+        {
+            "true": True,
+            "active_batch_id": state.get("active_batch_id"),
+            "items": available_batches(),
+        }
+    )
 
 
 @app.route("/generate", methods=["POST"])
