@@ -67,7 +67,7 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 SECRET_KEY = os.getenv("QR_SECRET", "replace-this-with-a-long-secret-key")
 SUPERADMIN_PASSWORD = "22012004"
 SUPERADMIN_SESSION_KEY = "superadmin_logged_in"
-QR_256_KEY_ENV = "QR_256_KEY"
+QR_64_KEY_ENV = "QR_64_KEY"
 CIPHER_CODE_LENGTH = 64
 DATA_ROOT = configured_data_root()
 STATE_FILE = DATA_ROOT / "qr_state.json"
@@ -89,11 +89,11 @@ def configured_domain_name():
 
 def current_cipher_code():
     load_dotenv_file(APP_ROOT / ".env", override=True)
-    return str(os.getenv(QR_256_KEY_ENV, "")).strip()
+    return str(os.getenv(QR_64_KEY_ENV, "")).strip()
 
 
 def cipher_key_error():
-    return f"{QR_256_KEY_ENV} must be exactly {CIPHER_CODE_LENGTH} characters in .env"
+    return f"{QR_64_KEY_ENV} must be exactly {CIPHER_CODE_LENGTH} characters in .env"
 
 
 def utc_now():
