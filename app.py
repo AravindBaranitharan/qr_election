@@ -268,8 +268,16 @@ def qr_image_with_serial(claim_url, serial):
     qr.make(fit=True)
 
     qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-    font = ImageFont.load_default()
-    label = f"Serial: {serial:04d}"
+    label = f"S.No {serial:04d}"
+    font = None
+    for font_name in ("arial.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf"):
+        try:
+            font = ImageFont.truetype(font_name, size=20)
+            break
+        except OSError:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
 
     draw = ImageDraw.Draw(qr_image)
     try:
@@ -279,7 +287,7 @@ def qr_image_with_serial(claim_url, serial):
     except AttributeError:
         text_width, text_height = draw.textsize(label, font=font)
 
-    bottom_padding = max(text_height + 14, 26)
+    bottom_padding = max(text_height + 22, 40)
     canvas = Image.new("RGB", (qr_image.width, qr_image.height + bottom_padding), "white")
     canvas.paste(qr_image, (0, 0))
 
