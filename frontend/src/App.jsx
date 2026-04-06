@@ -72,7 +72,12 @@ function SubmitOnlyScreen({ token }) {
 
     async function submit() {
       try {
-        const response = await fetch(`/s/${token}`, { method: 'POST', cache: 'no-store' })
+        const response = await fetch('/scan_hash', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hash: token }),
+          cache: 'no-store',
+        })
         const data = await response.json()
         if (active) setResult(data)
       } catch (submitError) {
@@ -115,7 +120,12 @@ function LandingScannerScreen() {
     setLoading(true)
     setScanError('')
     try {
-      const response = await fetch(`/s/${token}`, { method: 'POST', cache: 'no-store' })
+      const response = await fetch('/scan_hash', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hash: token }),
+        cache: 'no-store',
+      })
       const data = await response.json()
       setResult(data)
     } catch (submitError) {

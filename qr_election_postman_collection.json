@@ -148,18 +148,26 @@
       "response": []
     },
     {
-      "name": "Scan QR - Empty POST",
+      "name": "Scan QR Hash - POST",
       "request": {
         "method": "POST",
-        "header": [],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"hash\": \"{{tokenHex}}\"\n}"
+        },
         "url": {
-          "raw": "{{baseUrl}}/s/{{tokenHex}}",
+          "raw": "{{baseUrl}}/scan_hash",
           "host": [
             "{{baseUrl}}"
           ],
           "path": [
-            "s",
-            "{{tokenHex}}"
+            "scan_hash"
           ]
         }
       },

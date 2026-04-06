@@ -104,6 +104,7 @@ def empty_state():
     return {
         "total_qr": 0,
         "true_count": 0,
+        "scanned_serials": [],
         "next_serial": 1,
         "output_dir": STATE_OUTPUT_DIR,
         "manifest_file": STATE_MANIFEST_PATH,
@@ -189,6 +190,20 @@ def normalize_state(state):
     true_count = int(state.get("true_count", 0) or 0)
     true_count = max(true_count, 0)
     total_qr = max(total_qr, 0)
+    scanned_serials = state.get("scanned_serials", [])
+    if not isinstance(scanned_serials, list):
+        scanned_serials = []
+    normalized_scanned = []
+    seen_serials = set()
+    for value in scanned_serials:
+        try:
+            serial = int(value)
+        except (TypeError, ValueError):
+            continue
+        if serial <= 0 or serial in seen_serials:
+            continue
+        seen_serials.add(serial)
+        normalized_scanned.append(serial)
 
     manifest = load_manifest()
     if manifest:
@@ -204,9 +219,11 @@ def normalize_state(state):
         if next_serial <= 0:
             next_serial = total_qr + 1
 
+    filtered_scanned = [serial for serial in normalized_scanned if serial <= total_qr or total_qr <= 0]
     normalized = {
         "total_qr": total_qr,
-        "true_count": min(true_count, total_qr) if total_qr > 0 else true_count,
+        "true_count": min(len(filtered_scanned), total_qr) if total_qr > 0 else len(filtered_scanned),
+        "scanned_serials": filtered_scanned,
         "next_serial": max(next_serial, 1),
         "output_dir": STATE_OUTPUT_DIR,
         "manifest_file": STATE_MANIFEST_PATH,
@@ -286,13 +303,13 @@ def decode_token(token_hex):
     return {"serial": serial}
 
 
-def qr_image_with_serial(claim_url, serial):
+def qr_image_with_serial(qr_payload, serial):
     qr = qrcode.QRCode(
         error_correction=qrcode.constants.ERROR_CORRECT_L,
         box_size=8,
         border=2,
     )
-    qr.add_data(claim_url)
+    qr.add_data(qr_payload)
     qr.make(fit=True)
 
     qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
@@ -399,6 +416,87 @@ def scan_payload(success, state, message, serial=None):
             "serial": serial,
         }
     )
+
+
+def process_scan_token(token_hex):
+    with STATE_LOCK:
+        state = load_state()
+        client_ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip()
+        token_fingerprint = hashlib.sha256(token_hex.encode("utf-8")).hexdigest()[:20]
+        payload = decode_token(token_hex)
+
+        if not payload:
+            append_scan_log(
+                {
+                    "timestamp": utc_now(),
+                    "accepted": False,
+                    "message": "invalid token",
+                    "serial": None,
+                    "count": int(state.get("true_count", 0) or 0),
+                    "total": int(state.get("total_qr", 0) or 0),
+                    "ip": client_ip,
+                    "token": token_fingerprint,
+                }
+            )
+            return scan_payload(False, state, "invalid token")
+
+        serial = int(payload.get("serial", 0) or 0)
+        total_qr = int(state.get("total_qr", 0) or 0)
+        if serial <= 0 or serial > total_qr:
+            append_scan_log(
+                {
+                    "timestamp": utc_now(),
+                    "accepted": False,
+                    "message": "serial not generated",
+                    "serial": serial,
+                    "count": int(state.get("true_count", 0) or 0),
+                    "total": total_qr,
+                    "ip": client_ip,
+                    "token": token_fingerprint,
+                }
+            )
+            return scan_payload(False, state, "serial not generated", serial=serial)
+
+        scanned_serials = set()
+        for value in state.get("scanned_serials", []):
+            try:
+                existing_serial = int(value)
+            except (TypeError, ValueError):
+                continue
+            if existing_serial > 0:
+                scanned_serials.add(existing_serial)
+        if serial in scanned_serials:
+            append_scan_log(
+                {
+                    "timestamp": utc_now(),
+                    "accepted": False,
+                    "message": "already scanned",
+                    "serial": serial,
+                    "count": int(state.get("true_count", 0) or 0),
+                    "total": total_qr,
+                    "ip": client_ip,
+                    "token": token_fingerprint,
+                }
+            )
+            return scan_payload(False, state, "already scanned", serial=serial)
+
+        scanned_serials.add(serial)
+        state["scanned_serials"] = sorted(scanned_serials)
+        state["true_count"] = len(state["scanned_serials"])
+        save_state(state)
+        append_scan_log(
+            {
+                "timestamp": utc_now(),
+                "accepted": True,
+                "message": "accepted",
+                "serial": serial,
+                "count": int(state.get("true_count", 0) or 0),
+                "total": total_qr,
+                "ip": client_ip,
+                "token": token_fingerprint,
+            }
+        )
+        return scan_payload(True, state, "accepted", serial=serial)
 
 
 def build_claim_page(token_hex):
@@ -694,15 +792,13 @@ def generate_qr_local(count=None):
         for offset in range(count):
             serial = start_serial + offset
             token_hex = create_token(serial)
-            claim_url = f"{base_url}/c/{token_hex}"
             image_url = f"{base_url}/qr/{serial}.png"
             image_path = OUTPUT_ROOT / f"qr_{serial:04d}.png"
-            qr_image_with_serial(claim_url, serial).save(image_path)
+            qr_image_with_serial(token_hex, serial).save(image_path)
 
             item = {
                 "serial": serial,
                 "hex": token_hex,
-                "claim_url": claim_url,
                 "image_url": image_url,
                 "file": str(image_path.resolve()),
             }
@@ -804,58 +900,26 @@ def claim_qr(token_hex):
 @app.post("/s/<token_hex>")
 @app.post("/scan/<token_hex>")
 def scan_qr(token_hex):
-    with STATE_LOCK:
-        state = load_state()
-        client_ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip()
-        token_fingerprint = hashlib.sha256(token_hex.encode("utf-8")).hexdigest()[:20]
-        payload = decode_token(token_hex)
+    token_value = str(token_hex or "").strip().lower()
+    return process_scan_token(token_value)
 
-        if not payload:
-            append_scan_log(
-                {
-                    "timestamp": utc_now(),
-                    "accepted": False,
-                    "message": "invalid token",
-                    "serial": None,
-                    "count": int(state.get("true_count", 0) or 0),
-                    "total": int(state.get("total_qr", 0) or 0),
-                    "ip": client_ip,
-                    "token": token_fingerprint,
-                }
-            )
-            return scan_payload(False, state, "invalid token")
 
-        serial = int(payload.get("serial", 0) or 0)
-        if serial <= 0 or serial > int(state.get("total_qr", 0) or 0):
-            append_scan_log(
-                {
-                    "timestamp": utc_now(),
-                    "accepted": False,
-                    "message": "serial not generated",
-                    "serial": serial,
-                    "count": int(state.get("true_count", 0) or 0),
-                    "total": int(state.get("total_qr", 0) or 0),
-                    "ip": client_ip,
-                    "token": token_fingerprint,
-                }
-            )
-            return scan_payload(False, state, "serial not generated", serial=serial)
-
-        state["true_count"] = int(state.get("true_count", 0) or 0) + 1
-        save_state(state)
-        append_scan_log(
-            {
-                "timestamp": utc_now(),
-                "accepted": True,
-                "message": "accepted",
-                "serial": serial,
-                "count": int(state.get("true_count", 0) or 0),
-                "total": int(state.get("total_qr", 0) or 0),
-                "ip": client_ip,
-                "token": token_fingerprint,
-            }
-        )
-        return scan_payload(True, state, "accepted", serial=serial)
+@app.post("/scan_hash")
+def scan_hash():
+    payload = request.get_json(silent=True) or {}
+    token_value = (
+        payload.get("hash")
+        or payload.get("token")
+        or request.form.get("hash")
+        or request.form.get("token")
+        or ""
+    )
+    token_value = str(token_value).strip().lower()
+    if not token_value:
+        with STATE_LOCK:
+            state = load_state()
+        return scan_payload(False, state, "hash is required")
+    return process_scan_token(token_value)
 
 
 @app.get("/status")
