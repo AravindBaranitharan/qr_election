@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import Lock
 
 import qrcode
+from PIL import Image, ImageDraw, ImageFont
 from flask import (
     Flask,
     Response,
@@ -25,6 +26,13 @@ from flask import (
 
 
 APP_ROOT = Path(__file__).resolve().parent
+
+
+def configured_data_root():
+    raw_path = (os.getenv("DATA_DIR") or "").strip()
+    if not raw_path:
+        return APP_ROOT
+    return Path(raw_path).expanduser().resolve()
 
 
 def load_dotenv_file(dotenv_path, override=True):
@@ -60,8 +68,9 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 SECRET_KEY = os.getenv("QR_SECRET", "replace-this-with-a-long-secret-key")
 SUPERADMIN_PASSWORD = "22012004"
 SUPERADMIN_SESSION_KEY = "superadmin_logged_in"
-STATE_FILE = APP_ROOT / "qr_state.json"
-OUTPUT_ROOT = APP_ROOT / "generated_qr"
+DATA_ROOT = configured_data_root()
+STATE_FILE = DATA_ROOT / "qr_state.json"
+OUTPUT_ROOT = DATA_ROOT / "generated_qr"
 STATE_LOCK = Lock()
 TOKEN_VERSION = 1
 BATCH_ID_BYTES = 4
@@ -94,17 +103,97 @@ def empty_state():
     }
 
 
-def load_state():
-    if not STATE_FILE.exists():
+def read_json_file(path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def batch_scan_state_file(batch_id):
+    return OUTPUT_ROOT / batch_id / "scan_state.json"
+
+
+def save_batch_scan_state(batch_id, state):
+    scan_state = {
+        "true_count": int(state.get("true_count", 0) or 0),
+        "used_token_hashes": list(state.get("used_token_hashes", [])),
+        "updated_at": state.get("updated_at"),
+    }
+    scan_file = batch_scan_state_file(batch_id)
+    scan_file.parent.mkdir(parents=True, exist_ok=True)
+    scan_file.write_text(json.dumps(scan_state, indent=2), encoding="utf-8")
+
+
+def latest_batch_state():
+    if not OUTPUT_ROOT.exists():
         return empty_state()
 
-    try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    candidates = []
+    for batch_dir in OUTPUT_ROOT.iterdir():
+        if not batch_dir.is_dir():
+            continue
+
+        batch_id = batch_dir.name
+        if len(batch_id) != BATCH_ID_BYTES * 2:
+            continue
+
+        try:
+            bytes.fromhex(batch_id)
+        except ValueError:
+            continue
+
+        candidates.append(batch_dir)
+
+    if not candidates:
         return empty_state()
+
+    latest = max(candidates, key=lambda path: path.stat().st_mtime)
+    batch_id = latest.name
+    manifest_file = latest / "manifest.json"
+    manifest_items = read_json_file(manifest_file)
+    total_qr = len(manifest_items) if isinstance(manifest_items, list) else 0
+
+    scan_data = read_json_file(batch_scan_state_file(batch_id)) or {}
+    used_token_hashes = scan_data.get("used_token_hashes", [])
+    if not isinstance(used_token_hashes, list):
+        used_token_hashes = []
+
+    true_count = int(scan_data.get("true_count", len(used_token_hashes)) or 0)
+    true_count = max(true_count, len(used_token_hashes))
+
+    generated_at = datetime.fromtimestamp(
+        manifest_file.stat().st_mtime if manifest_file.exists() else latest.stat().st_mtime,
+        tz=timezone.utc,
+    ).isoformat()
+    updated_at = scan_data.get("updated_at") or generated_at
+
+    return {
+        "active_batch_id": batch_id,
+        "total_qr": total_qr,
+        "true_count": true_count,
+        "used_token_hashes": used_token_hashes,
+        "generated_at": generated_at,
+        "updated_at": updated_at,
+        "output_dir": str(latest.resolve()),
+        "manifest_file": str(manifest_file.resolve()),
+    }
+
+
+def load_state():
+    if STATE_FILE.exists():
+        state = read_json_file(STATE_FILE)
+        if isinstance(state, dict):
+            return state
+
+    recovered_state = latest_batch_state()
+    if recovered_state.get("active_batch_id"):
+        save_state(recovered_state)
+    return recovered_state
 
 
 def save_state(state):
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
@@ -167,6 +256,38 @@ def decode_token(token_hex):
             "big",
         ),
     }
+
+
+def qr_image_with_serial(claim_url, serial):
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=8,
+        border=2,
+    )
+    qr.add_data(claim_url)
+    qr.make(fit=True)
+
+    qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    font = ImageFont.load_default()
+    label = f"Serial: {serial:04d}"
+
+    draw = ImageDraw.Draw(qr_image)
+    try:
+        text_bbox = draw.textbbox((0, 0), label, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+    except AttributeError:
+        text_width, text_height = draw.textsize(label, font=font)
+
+    bottom_padding = max(text_height + 14, 26)
+    canvas = Image.new("RGB", (qr_image.width, qr_image.height + bottom_padding), "white")
+    canvas.paste(qr_image, (0, 0))
+
+    canvas_draw = ImageDraw.Draw(canvas)
+    text_x = max((canvas.width - text_width) // 2, 0)
+    text_y = qr_image.height + (bottom_padding - text_height) // 2 - 1
+    canvas_draw.text((text_x, text_y), label, fill="black", font=font)
+    return canvas
 
 
 def current_base_url():
@@ -557,16 +678,7 @@ def generate(count=None):
         claim_url = f"{base_url}/c/{token_hex}"
         image_url = f"{base_url}/batch/{batch_id}/qr/{serial}.png"
         image_path = output_dir / f"qr_{serial:04d}.png"
-
-        qr = qrcode.QRCode(
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=8,
-            border=2,
-        )
-        qr.add_data(claim_url)
-        qr.make(fit=True)
-        image = qr.make_image(fill_color="black", back_color="white")
-        image.save(image_path)
+        qr_image_with_serial(claim_url, serial).save(image_path)
 
         items.append(
             {
@@ -594,6 +706,7 @@ def generate(count=None):
 
     with STATE_LOCK:
         save_state(state)
+        save_batch_scan_state(batch_id, state)
 
     return jsonify(
         {
@@ -698,6 +811,8 @@ def scan_qr(token_hex):
         state["true_count"] = int(state.get("true_count", 0)) + 1
         state["updated_at"] = utc_now()
         save_state(state)
+        if state.get("active_batch_id"):
+            save_batch_scan_state(state["active_batch_id"], state)
 
         return scan_payload(True, state, "accepted", serial=payload.get("serial"))
 
@@ -721,6 +836,7 @@ def status():
             "output_dir": state.get("output_dir"),
             "manifest_file": state.get("manifest_file"),
             "used_count": len(state.get("used_token_hashes", [])),
+            "data_root": str(DATA_ROOT),
         }
     )
 
