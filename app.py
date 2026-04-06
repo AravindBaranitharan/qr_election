@@ -269,10 +269,11 @@ def qr_image_with_serial(claim_url, serial):
 
     qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
     label = f"S.No {serial:04d}"
+    preferred_size = max(int(qr_image.height * 0.12), 20)
     font = None
     for font_name in ("arial.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf"):
         try:
-            font = ImageFont.truetype(font_name, size=20)
+            font = ImageFont.truetype(font_name, size=preferred_size)
             break
         except OSError:
             continue
@@ -287,13 +288,19 @@ def qr_image_with_serial(claim_url, serial):
     except AttributeError:
         text_width, text_height = draw.textsize(label, font=font)
 
-    bottom_padding = max(text_height + 22, 40)
-    canvas = Image.new("RGB", (qr_image.width, qr_image.height + bottom_padding), "white")
+    right_panel_width = max(text_width + 44, int(qr_image.width * 0.44))
+    canvas = Image.new("RGB", (qr_image.width + right_panel_width, qr_image.height), "white")
     canvas.paste(qr_image, (0, 0))
 
     canvas_draw = ImageDraw.Draw(canvas)
-    text_x = max((canvas.width - text_width) // 2, 0)
-    text_y = qr_image.height + (bottom_padding - text_height) // 2 - 1
+    divider_x = qr_image.width
+    canvas_draw.line(
+        [(divider_x, 14), (divider_x, canvas.height - 14)],
+        fill=(214, 214, 214),
+        width=2,
+    )
+    text_x = divider_x + max((right_panel_width - text_width) // 2, 10)
+    text_y = max((canvas.height - text_height) // 2, 0)
     canvas_draw.text((text_x, text_y), label, fill="black", font=font)
     return canvas
 
