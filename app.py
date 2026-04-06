@@ -67,6 +67,7 @@ SECRET_KEY = os.getenv("QR_SECRET", "replace-this-with-a-long-secret-key")
 SUPERADMIN_PASSWORD = "22012004"
 SUPERADMIN_SESSION_KEY = "superadmin_logged_in"
 QR_256_KEY_ENV = "QR_256_KEY"
+CIPHER_CODE_LENGTH = 64
 DATA_ROOT = configured_data_root()
 STATE_FILE = DATA_ROOT / "qr_state.json"
 OUTPUT_ROOT = DATA_ROOT / "generated_qr"
@@ -88,7 +89,7 @@ def current_cipher_code():
 
 
 def cipher_key_error():
-    return f"{QR_256_KEY_ENV} must be exactly 256 characters in .env"
+    return f"{QR_256_KEY_ENV} must be exactly {CIPHER_CODE_LENGTH} characters in .env"
 
 
 def empty_state():
@@ -181,7 +182,7 @@ def xor_bytes(data, key):
 
 def create_token(serial):
     code = current_cipher_code()
-    if len(code) != 256:
+    if len(code) != CIPHER_CODE_LENGTH:
         raise ValueError(cipher_key_error())
 
     plain = f"{TOKEN_VERSION}|{serial:08d}|{code}".encode("utf-8")
@@ -191,7 +192,7 @@ def create_token(serial):
 
 def decode_token(token_hex):
     code = current_cipher_code()
-    if len(code) != 256:
+    if len(code) != CIPHER_CODE_LENGTH:
         return None
 
     try:
@@ -612,7 +613,7 @@ def generate(count=None):
     if count <= 0:
         return jsonify({"true": False, "message": "count must be greater than 0"}), 400
 
-    if len(current_cipher_code()) != 256:
+    if len(current_cipher_code()) != CIPHER_CODE_LENGTH:
         return jsonify({"true": False, "message": cipher_key_error()}), 400
 
     base_url = current_base_url()
