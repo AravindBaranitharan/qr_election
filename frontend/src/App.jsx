@@ -242,14 +242,9 @@ function SuperAdminScreen() {
               <strong>{stateData?.next_serial ?? '-'}</strong>
             </article>
           </div>
-          <p className="mini muted">Output: {stateData?.output_dir || '-'}</p>
-          <p className="mini muted">Manifest: {stateData?.manifest_file || '-'}</p>
           <div className="admin-links">
             <a href="/download.zip" target="_blank" rel="noreferrer">
               Download ZIP
-            </a>
-            <a href="/manifest.json" target="_blank" rel="noreferrer">
-              Open Manifest
             </a>
             <a href="/qr/1.png" target="_blank" rel="noreferrer">
               First QR Image
