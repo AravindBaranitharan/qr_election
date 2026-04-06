@@ -1,8 +1,8 @@
 {
-  "total_qr": 0,
+  "total_qr": 50,
   "true_count": 0,
   "scanned_serials": [],
-  "next_serial": 1,
+  "next_serial": 51,
   "output_dir": "generated_qr",
   "manifest_file": "generated_qr/manifest.json"
 }
