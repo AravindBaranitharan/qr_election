@@ -268,40 +268,92 @@ def qr_image_with_serial(claim_url, serial):
     qr.make(fit=True)
 
     qr_image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-    label = f"S.No {serial:04d}"
-    preferred_size = max(int(qr_image.height * 0.12), 20)
-    font = None
-    for font_name in ("arial.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf"):
+    saffron = (255, 153, 51)
+    green = (19, 136, 8)
+    navy = (11, 44, 84)
+
+    def pick_font(size, bold=False):
+        names = (
+            ("arialbd.ttf", "DejaVuSans-Bold.ttf", "arial.ttf", "DejaVuSans.ttf")
+            if bold
+            else ("arial.ttf", "DejaVuSans.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf")
+        )
+        for name in names:
+            try:
+                return ImageFont.truetype(name, size=size)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    def text_size(drawer, value, font):
         try:
-            font = ImageFont.truetype(font_name, size=preferred_size)
-            break
-        except OSError:
-            continue
-    if font is None:
-        font = ImageFont.load_default()
+            left, top, right, bottom = drawer.textbbox((0, 0), value, font=font)
+            return right - left, bottom - top
+        except AttributeError:
+            return drawer.textsize(value, font=font)
 
-    draw = ImageDraw.Draw(qr_image)
-    try:
-        text_bbox = draw.textbbox((0, 0), label, font=font)
-        text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
-    except AttributeError:
-        text_width, text_height = draw.textsize(label, font=font)
+    title_font = pick_font(max(int(qr_image.height * 0.095), 18), bold=True)
+    serial_font = pick_font(max(int(qr_image.height * 0.13), 22), bold=True)
+    meta_font = pick_font(max(int(qr_image.height * 0.06), 13), bold=False)
 
-    right_panel_width = max(text_width + 44, int(qr_image.width * 0.44))
-    canvas = Image.new("RGB", (qr_image.width + right_panel_width, qr_image.height), "white")
-    canvas.paste(qr_image, (0, 0))
+    top_band_h = max(int(qr_image.height * 0.16), 44)
+    bottom_band_h = top_band_h
+    middle_h = qr_image.height + 30
+    info_w = max(int(qr_image.width * 0.92), 275)
+    qr_w = qr_image.width + 56
 
-    canvas_draw = ImageDraw.Draw(canvas)
-    divider_x = qr_image.width
-    canvas_draw.line(
-        [(divider_x, 14), (divider_x, canvas.height - 14)],
-        fill=(214, 214, 214),
-        width=2,
+    card_w = info_w + qr_w
+    card_h = top_band_h + middle_h + bottom_band_h
+
+    canvas = Image.new("RGB", (card_w, card_h), "white")
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rectangle([(0, 0), (card_w, top_band_h)], fill=saffron)
+    draw.rectangle([(0, card_h - bottom_band_h), (card_w, card_h)], fill=green)
+
+    middle_top = top_band_h
+    middle_bottom = card_h - bottom_band_h
+
+    divider_x = info_w
+    for y in range(middle_top + 8, middle_bottom - 8, 12):
+        draw.line([(divider_x, y), (divider_x, y + 6)], fill=(170, 177, 186), width=2)
+
+    title = "BOARDING PASS"
+    subtitle = "QR ACCESS"
+    serial_label = f"S.No {serial:04d}"
+    meta_text = "ONE-TIME VALID SCAN"
+
+    stripe_x = 18
+    text_left = 58
+    _, title_h = text_size(draw, title, title_font)
+    _, subtitle_h = text_size(draw, subtitle, meta_font)
+    _, serial_h = text_size(draw, serial_label, serial_font)
+    _, meta_h = text_size(draw, meta_text, meta_font)
+
+    text_y = middle_top + max((middle_h - (title_h + subtitle_h + serial_h + meta_h + 22)) // 2, 8)
+    draw.text((text_left, text_y), title, fill=navy, font=title_font)
+    draw.text((text_left, text_y + title_h + 4), subtitle, fill=(63, 79, 99), font=meta_font)
+    draw.text((text_left, text_y + title_h + subtitle_h + 12), serial_label, fill=navy, font=serial_font)
+    draw.text(
+        (text_left, text_y + title_h + subtitle_h + serial_h + 18),
+        meta_text,
+        fill=(63, 79, 99),
+        font=meta_font,
     )
-    text_x = divider_x + max((right_panel_width - text_width) // 2, 10)
-    text_y = max((canvas.height - text_height) // 2, 0)
-    canvas_draw.text((text_x, text_y), label, fill="black", font=font)
+
+    draw.rectangle([(stripe_x, middle_top + 10), (stripe_x + 9, middle_bottom - 10)], fill=saffron)
+    draw.rectangle([(stripe_x + 9, middle_top + 10), (stripe_x + 18, middle_bottom - 10)], fill="white")
+    draw.rectangle([(stripe_x + 18, middle_top + 10), (stripe_x + 27, middle_bottom - 10)], fill=green)
+
+    qr_x = info_w + (qr_w - qr_image.width) // 2
+    qr_y = middle_top + (middle_h - qr_image.height) // 2
+    canvas.paste(qr_image, (qr_x, qr_y))
+
+    band_text = "INDIA"
+    band_font = pick_font(max(int(top_band_h * 0.42), 16), bold=True)
+    band_w, band_h = text_size(draw, band_text, band_font)
+    draw.text(((card_w - band_w) // 2, (top_band_h - band_h) // 2), band_text, fill=navy, font=band_font)
+
     return canvas
 
 
