@@ -58,7 +58,24 @@
       "response": []
     },
     {
-      "name": "Generate QR Batch - GET",
+      "name": "QR State JSON",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/qr_state.json",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "qr_state.json"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Generate QR Local - GET",
       "request": {
         "method": "GET",
         "header": [
@@ -68,12 +85,12 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/generate/{{qrCount}}?t={{$timestamp}}",
+          "raw": "{{baseUrl}}/generate_qr_local/{{qrCount}}?t={{$timestamp}}",
           "host": [
             "{{baseUrl}}"
           ],
           "path": [
-            "generate",
+            "generate_qr_local",
             "{{qrCount}}"
           ],
           "query": [
@@ -87,7 +104,7 @@
       "response": []
     },
     {
-      "name": "Generate QR Batch - POST",
+      "name": "Generate QR Local - POST",
       "request": {
         "method": "POST",
         "header": [
@@ -98,15 +115,15 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"count\": {{qrCount}},\n  \"base_url\": \"{{baseUrl}}\"\n}"
+          "raw": "{\n  \"count\": {{qrCount}}\n}"
         },
         "url": {
-          "raw": "{{baseUrl}}/generate",
+          "raw": "{{baseUrl}}/generate_qr_local",
           "host": [
             "{{baseUrl}}"
           ],
           "path": [
-            "generate"
+            "generate_qr_local"
           ]
         }
       },

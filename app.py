@@ -507,12 +507,14 @@ def disable_api_caching(response):
     if request.path.startswith(
         (
             "/generate",
+            "/generate_qr_local",
             "/status",
             "/scan",
             "/s",
             "/c",
             "/claim",
             "/manifest.json",
+            "/qr_state.json",
             "/qr/",
             "/download.zip",
             "/superadmin",
@@ -535,8 +537,8 @@ def index():
         {
             "message": "Flask QR local one-time scan service",
             "generate_examples": [
-                "GET /generate/10",
-                "POST /generate with JSON: {\"count\": 10}",
+                "GET /generate_qr_local/10",
+                "POST /generate_qr_local with JSON: {\"count\": 10}",
             ],
             "domain_name": configured_domain_name(),
             "status_url": "/status",
@@ -602,9 +604,11 @@ def superadmin_spa(path):
     return jsonify({"true": False, "message": "frontend not built"}), 404
 
 
+@app.route("/generate_qr_local", methods=["POST"])
+@app.route("/generate_qr_local/<int:count>", methods=["GET"])
 @app.route("/generate", methods=["POST"])
 @app.route("/generate/<int:count>", methods=["GET"])
-def generate(count=None):
+def generate_qr_local(count=None):
     try:
         count = current_count(count)
     except ValueError as exc:
@@ -667,6 +671,13 @@ def generate(count=None):
                 "items": items,
             }
         )
+
+
+@app.get("/qr_state.json")
+def qr_state_file():
+    with STATE_LOCK:
+        state = load_state()
+    return jsonify(state)
 
 
 @app.get("/manifest.json")

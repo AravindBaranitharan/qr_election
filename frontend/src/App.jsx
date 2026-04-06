@@ -181,58 +181,69 @@ function LandingScannerScreen() {
 }
 
 function SuperAdminScreen() {
-  const [status, setStatus] = useState(null)
+  const [stateData, setStateData] = useState(null)
   const [error, setError] = useState('')
 
-  async function loadStatus() {
+  async function loadState() {
     try {
-      const response = await fetch('/status', { cache: 'no-store' })
+      const response = await fetch('/qr_state.json', { cache: 'no-store' })
       const data = await response.json()
-      setStatus(data)
-    } catch (statusError) {
-      setError(String(statusError))
+      setStateData(data)
+    } catch (stateError) {
+      setError(String(stateError))
     }
   }
 
   useEffect(() => {
-    loadStatus()
-    const timer = window.setInterval(loadStatus, 3000)
+    loadState()
+    const timer = window.setInterval(loadState, 3000)
     return () => window.clearInterval(timer)
   }, [])
+
+  const total = Number(stateData?.total_qr || 0)
+  const accepted = Number(stateData?.true_count || 0)
+  const remaining = Math.max(total - accepted, 0)
+  const over = total > 0 && accepted >= total
 
   return (
     <main className="admin-shell">
       <section className="card compact hero-card">
         <p className="badge">Local Mode</p>
         <h1>Superadmin</h1>
-        <p className="muted">QR generation is now local API only (Postman/backend). This screen is status + downloads.</p>
+        <p className="muted">Use endpoint <code>/generate_qr_local</code> with count. This screen reads from <code>qr_state.json</code>.</p>
         <a className="logout-link" href="/superadmin/logout">
           Logout
         </a>
       </section>
 
-      {status && (
+      {stateData && (
         <section className="card compact">
           <div className="status-head">
             <h2>Current Status</h2>
-            <p className={`status-pill ${status?.over ? 'pill-over' : 'pill-live'}`}>
-              {status?.over ? 'Over' : 'Live'}
+            <p className={`status-pill ${over ? 'pill-over' : 'pill-live'}`}>
+              {over ? 'Over' : 'Live'}
             </p>
           </div>
           <div className="admin-status-grid">
             <article className="status-tile">
-              <small>Total QR</small>
-              <strong>{status?.total_qr ?? 0}</strong>
+              <small>Total Generated QR</small>
+              <strong>{total}</strong>
             </article>
             <article className="status-tile">
               <small>Accepted</small>
-              <strong>{status?.true_count ?? 0}</strong>
+              <strong>{accepted}</strong>
             </article>
             <article className="status-tile">
               <small>Remaining</small>
-              <strong>{status?.remaining ?? 0}</strong>
+              <strong>{remaining}</strong>
+            </article>
+            <article className="status-tile">
+              <small>Next Serial</small>
+              <strong>{stateData?.next_serial ?? '-'}</strong>
             </article>
           </div>
+          <p className="mini muted">Output: {stateData?.output_dir || '-'}</p>
+          <p className="mini muted">Manifest: {stateData?.manifest_file || '-'}</p>
           <div className="admin-links">
             <a href="/download.zip" target="_blank" rel="noreferrer">
               Download ZIP
