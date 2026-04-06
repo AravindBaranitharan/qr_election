@@ -180,23 +180,90 @@ function LandingScannerScreen() {
   )
 }
 
+function ScanTimelineChart({ points }) {
+  if (!Array.isArray(points) || points.length === 0) {
+    return <p className="muted">No scans yet.</p>
+  }
+
+  const width = 360
+  const height = 170
+  const left = 20
+  const right = width - 16
+  const top = 14
+  const bottom = height - 24
+  const graphWidth = right - left
+  const graphHeight = bottom - top
+  const xStep = points.length > 1 ? graphWidth / (points.length - 1) : 0
+  const maxY = Math.max(
+    1,
+    ...points.map((point) => Math.max(Number(point?.total || 0), Number(point?.accepted || 0))),
+  )
+
+  function yFor(value) {
+    return bottom - (Number(value || 0) / maxY) * graphHeight
+  }
+
+  function lineFor(key) {
+    return points
+      .map((point, index) => `${left + index * xStep},${yFor(point?.[key] || 0)}`)
+      .join(' ')
+  }
+
+  const startLabel = String(points[0]?.time || '').replace('T', ' ')
+  const endLabel = String(points[points.length - 1]?.time || '').replace('T', ' ')
+
+  return (
+    <div className="timeline-wrap">
+      <svg viewBox={`0 0 ${width} ${height}`} className="timeline-svg" aria-label="Scan timeline graph">
+        {[0, 0.25, 0.5, 0.75, 1].map((part) => {
+          const y = top + graphHeight * part
+          return <line key={part} x1={left} y1={y} x2={right} y2={y} stroke="#dce9f2" strokeWidth="1" />
+        })}
+        <polyline fill="none" stroke="#2c8fcc" strokeWidth="2.5" points={lineFor('total')} />
+        <polyline fill="none" stroke="#1b9a58" strokeWidth="2.5" points={lineFor('accepted')} />
+      </svg>
+      <div className="timeline-legend">
+        <span className="legend-item">
+          <i className="legend-dot legend-total" />
+          Scans
+        </span>
+        <span className="legend-item">
+          <i className="legend-dot legend-accepted" />
+          Accepted
+        </span>
+      </div>
+      <div className="timeline-axis">
+        <small>{startLabel || '-'}</small>
+        <small>{endLabel || '-'}</small>
+      </div>
+    </div>
+  )
+}
+
 function SuperAdminScreen() {
   const [stateData, setStateData] = useState(null)
+  const [timelinePoints, setTimelinePoints] = useState([])
   const [error, setError] = useState('')
 
-  async function loadState() {
+  async function loadDashboard() {
     try {
-      const response = await fetch('/qr_state.json', { cache: 'no-store' })
-      const data = await response.json()
-      setStateData(data)
-    } catch (stateError) {
-      setError(String(stateError))
+      const [stateResponse, graphResponse] = await Promise.all([
+        fetch('/qr_state.json', { cache: 'no-store' }),
+        fetch('/scan_metrics', { cache: 'no-store' }),
+      ])
+      const state = await stateResponse.json()
+      const graph = await graphResponse.json()
+      setStateData(state)
+      setTimelinePoints(Array.isArray(graph?.points) ? graph.points : [])
+      setError('')
+    } catch (dashboardError) {
+      setError(String(dashboardError))
     }
   }
 
   useEffect(() => {
-    loadState()
-    const timer = window.setInterval(loadState, 3000)
+    loadDashboard()
+    const timer = window.setInterval(loadDashboard, 3000)
     return () => window.clearInterval(timer)
   }, [])
 
@@ -207,13 +274,13 @@ function SuperAdminScreen() {
 
   return (
     <main className="admin-shell">
-      <section className="card compact hero-card">
-        <p className="badge">Local Mode</p>
-        <h1>Superadmin</h1>
-        <p className="muted">Use endpoint <code>/generate_qr_local</code> with count. This screen reads from <code>qr_state.json</code>.</p>
-        <a className="logout-link" href="/superadmin/logout">
-          Logout
-        </a>
+      <section className="card compact">
+        <div className="status-head">
+          <h1>Status</h1>
+          <a className="logout-link" href="/superadmin/logout">
+            Logout
+          </a>
+        </div>
       </section>
 
       {stateData && (
@@ -242,16 +309,13 @@ function SuperAdminScreen() {
               <strong>{stateData?.next_serial ?? '-'}</strong>
             </article>
           </div>
-          <div className="admin-links">
-            <a href="/download.zip" target="_blank" rel="noreferrer">
-              Download ZIP
-            </a>
-            <a href="/qr/1.png" target="_blank" rel="noreferrer">
-              First QR Image
-            </a>
-          </div>
         </section>
       )}
+
+      <section className="card compact">
+        <h2>Scan Timeline</h2>
+        <ScanTimelineChart points={timelinePoints} />
+      </section>
 
       {error && (
         <section className="card compact error-box">

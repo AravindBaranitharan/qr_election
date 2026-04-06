@@ -2,6 +2,6 @@
   "total_qr": 50,
   "true_count": 0,
   "next_serial": 51,
-  "output_dir": "E:\\qr_election\\generated_qr",
-  "manifest_file": "E:\\qr_election\\generated_qr\\manifest.json"
+  "output_dir": "generated_qr",
+  "manifest_file": "generated_qr/manifest.json"
 }

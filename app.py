@@ -5,6 +5,7 @@ import io
 import json
 import os
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
@@ -72,8 +73,11 @@ DATA_ROOT = configured_data_root()
 STATE_FILE = DATA_ROOT / "qr_state.json"
 OUTPUT_ROOT = DATA_ROOT / "generated_qr"
 MANIFEST_FILE = OUTPUT_ROOT / "manifest.json"
+SCAN_LOG_FILE = DATA_ROOT / "scan_logs.jsonl"
 STATE_LOCK = Lock()
 TOKEN_VERSION = "1"
+STATE_OUTPUT_DIR = "generated_qr"
+STATE_MANIFEST_PATH = "generated_qr/manifest.json"
 
 app.secret_key = hashlib.sha256(f"{SECRET_KEY}-session".encode("utf-8")).hexdigest()
 
@@ -92,13 +96,17 @@ def cipher_key_error():
     return f"{QR_256_KEY_ENV} must be exactly {CIPHER_CODE_LENGTH} characters in .env"
 
 
+def utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+
 def empty_state():
     return {
         "total_qr": 0,
         "true_count": 0,
         "next_serial": 1,
-        "output_dir": str(OUTPUT_ROOT.resolve()),
-        "manifest_file": str(MANIFEST_FILE.resolve()),
+        "output_dir": STATE_OUTPUT_DIR,
+        "manifest_file": STATE_MANIFEST_PATH,
     }
 
 
@@ -107,6 +115,59 @@ def read_json_file(path):
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def append_scan_log(entry):
+    SCAN_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with SCAN_LOG_FILE.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def load_scan_logs(limit=1200):
+    if not SCAN_LOG_FILE.exists():
+        return []
+
+    lines = SCAN_LOG_FILE.read_text(encoding="utf-8").splitlines()
+    entries = []
+    for line in lines[-limit:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            entries.append(item)
+    return entries
+
+
+def build_scan_time_series(entries):
+    buckets = {}
+
+    for entry in entries:
+        timestamp = str(entry.get("timestamp", "")).strip()
+        if not timestamp:
+            continue
+        minute_key = timestamp[:16]
+
+        current = buckets.setdefault(
+            minute_key,
+            {
+                "time": minute_key.replace("T", " "),
+                "accepted": 0,
+                "rejected": 0,
+                "total": 0,
+            },
+        )
+        current["total"] += 1
+        if bool(entry.get("accepted")):
+            current["accepted"] += 1
+        else:
+            current["rejected"] += 1
+
+    keys = sorted(buckets.keys())
+    return [buckets[key] for key in keys]
 
 
 def load_manifest():
@@ -147,8 +208,8 @@ def normalize_state(state):
         "total_qr": total_qr,
         "true_count": min(true_count, total_qr) if total_qr > 0 else true_count,
         "next_serial": max(next_serial, 1),
-        "output_dir": str(OUTPUT_ROOT.resolve()),
-        "manifest_file": str(MANIFEST_FILE.resolve()),
+        "output_dir": STATE_OUTPUT_DIR,
+        "manifest_file": STATE_MANIFEST_PATH,
     }
     return normalized
 
@@ -510,6 +571,7 @@ def disable_api_caching(response):
             "/generate_qr_local",
             "/status",
             "/scan",
+            "/scan_metrics",
             "/s",
             "/c",
             "/claim",
@@ -650,8 +712,8 @@ def generate_qr_local(count=None):
         save_manifest(manifest)
         state["total_qr"] = len(manifest)
         state["next_serial"] = start_serial + count
-        state["output_dir"] = str(OUTPUT_ROOT.resolve())
-        state["manifest_file"] = str(MANIFEST_FILE.resolve())
+        state["output_dir"] = STATE_OUTPUT_DIR
+        state["manifest_file"] = STATE_MANIFEST_PATH
         save_state(state)
 
         return jsonify(
@@ -678,6 +740,19 @@ def qr_state_file():
     with STATE_LOCK:
         state = load_state()
     return jsonify(state)
+
+
+@app.get("/scan_metrics")
+def scan_metrics():
+    entries = load_scan_logs(limit=1600)
+    points = build_scan_time_series(entries)[-120:]
+    return jsonify(
+        {
+            "true": True,
+            "points": points,
+            "total_events": len(entries),
+        }
+    )
 
 
 @app.get("/manifest.json")
@@ -731,17 +806,55 @@ def claim_qr(token_hex):
 def scan_qr(token_hex):
     with STATE_LOCK:
         state = load_state()
+        client_ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip()
+        token_fingerprint = hashlib.sha256(token_hex.encode("utf-8")).hexdigest()[:20]
         payload = decode_token(token_hex)
 
         if not payload:
+            append_scan_log(
+                {
+                    "timestamp": utc_now(),
+                    "accepted": False,
+                    "message": "invalid token",
+                    "serial": None,
+                    "count": int(state.get("true_count", 0) or 0),
+                    "total": int(state.get("total_qr", 0) or 0),
+                    "ip": client_ip,
+                    "token": token_fingerprint,
+                }
+            )
             return scan_payload(False, state, "invalid token")
 
         serial = int(payload.get("serial", 0) or 0)
         if serial <= 0 or serial > int(state.get("total_qr", 0) or 0):
+            append_scan_log(
+                {
+                    "timestamp": utc_now(),
+                    "accepted": False,
+                    "message": "serial not generated",
+                    "serial": serial,
+                    "count": int(state.get("true_count", 0) or 0),
+                    "total": int(state.get("total_qr", 0) or 0),
+                    "ip": client_ip,
+                    "token": token_fingerprint,
+                }
+            )
             return scan_payload(False, state, "serial not generated", serial=serial)
 
         state["true_count"] = int(state.get("true_count", 0) or 0) + 1
         save_state(state)
+        append_scan_log(
+            {
+                "timestamp": utc_now(),
+                "accepted": True,
+                "message": "accepted",
+                "serial": serial,
+                "count": int(state.get("true_count", 0) or 0),
+                "total": int(state.get("total_qr", 0) or 0),
+                "ip": client_ip,
+                "token": token_fingerprint,
+            }
+        )
         return scan_payload(True, state, "accepted", serial=serial)
 
 
