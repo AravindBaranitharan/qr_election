@@ -10,26 +10,19 @@ function isSuperAdminPath() {
   return window.location.pathname === '/superadmin' || window.location.pathname.startsWith('/superadmin/')
 }
 
-function formatTimestamp(value) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString()
-}
-
 function extractToken(rawValue) {
   const value = String(rawValue || '').trim()
   if (!value) return null
 
-  const direct = value.match(/^[0-9a-fA-F]{42}$/)
+  const direct = value.match(/^[0-9a-fA-F]{64,}$/)
   if (direct) return direct[0].toLowerCase()
 
-  const fromPath = value.match(/\/(?:c|claim)\/([0-9a-fA-F]{42})/i)
+  const fromPath = value.match(/\/(?:c|claim)\/([0-9a-fA-F]{64,})/i)
   if (fromPath) return fromPath[1].toLowerCase()
 
   try {
     const parsed = new URL(value)
-    const pathMatch = parsed.pathname.match(/^\/(?:c|claim)\/([0-9a-fA-F]{42})$/i)
+    const pathMatch = parsed.pathname.match(/^\/(?:c|claim)\/([0-9a-fA-F]{64,})$/i)
     return pathMatch ? pathMatch[1].toLowerCase() : null
   } catch {
     return null
@@ -102,7 +95,6 @@ function SubmitOnlyScreen({ token }) {
 
 function LandingScannerScreen() {
   const videoRef = useRef(null)
-  const scannerRef = useRef(null)
   const busyRef = useRef(false)
   const cooldownRef = useRef({ token: '', at: 0 })
 
@@ -156,7 +148,6 @@ function LandingScannerScreen() {
       },
     )
 
-    scannerRef.current = scanner
     scanner
       .start()
       .then(() => {
@@ -170,7 +161,6 @@ function LandingScannerScreen() {
       active = false
       scanner.stop()
       scanner.destroy()
-      scannerRef.current = null
     }
   }, [])
 
@@ -191,15 +181,7 @@ function LandingScannerScreen() {
 }
 
 function SuperAdminScreen() {
-  const [count, setCount] = useState('17')
-  const [batchIdInput, setBatchIdInput] = useState('')
-  const [batches, setBatches] = useState([])
   const [status, setStatus] = useState(null)
-  const [batchData, setBatchData] = useState(null)
-  const [manifestData, setManifestData] = useState(null)
-  const [loadingGenerate, setLoadingGenerate] = useState(false)
-  const [loadingManifest, setLoadingManifest] = useState(false)
-  const [loadingBatches, setLoadingBatches] = useState(false)
   const [error, setError] = useState('')
 
   async function loadStatus() {
@@ -212,86 +194,18 @@ function SuperAdminScreen() {
     }
   }
 
-  async function loadBatches(preferredBatchId = '') {
-    setLoadingBatches(true)
-    try {
-      const response = await fetch('/batches', { cache: 'no-store' })
-      const data = await response.json()
-      const items = Array.isArray(data?.items) ? data.items : []
-      setBatches(items)
-
-      const fallbackBatchId =
-        String(preferredBatchId || '').trim() ||
-        String(data?.active_batch_id || '').trim() ||
-        String(items[0]?.batch_id || '').trim()
-
-      if (fallbackBatchId) {
-        setBatchIdInput((current) => (current ? current : fallbackBatchId))
-      }
-    } catch (batchError) {
-      setError(String(batchError))
-    } finally {
-      setLoadingBatches(false)
-    }
-  }
-
   useEffect(() => {
     loadStatus()
-    loadBatches()
+    const timer = window.setInterval(loadStatus, 3000)
+    return () => window.clearInterval(timer)
   }, [])
-
-  async function generateBatch(event) {
-    event.preventDefault()
-    setError('')
-    setLoadingGenerate(true)
-    setManifestData(null)
-    try {
-      const safeCount = Math.max(parseInt(count, 10) || 0, 1)
-      const response = await fetch('/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count: safeCount }),
-        cache: 'no-store',
-      })
-      const data = await response.json()
-      setBatchData(data)
-      setBatchIdInput(data.batch_id || '')
-      await loadStatus()
-      await loadBatches(data.batch_id || '')
-    } catch (generateError) {
-      setError(String(generateError))
-    } finally {
-      setLoadingGenerate(false)
-    }
-  }
-
-  async function fetchManifest(event) {
-    event.preventDefault()
-    setError('')
-    setLoadingManifest(true)
-    try {
-      const cleaned = String(batchIdInput || '').trim()
-      if (!cleaned) throw new Error('Enter a batch id first')
-      const response = await fetch(`/batch/${cleaned}/manifest.json?t=${Date.now()}`, { cache: 'no-store' })
-      if (!response.ok) throw new Error(`Manifest request failed (${response.status})`)
-      const data = await response.json()
-      setManifestData(data)
-    } catch (manifestError) {
-      setError(String(manifestError))
-      setManifestData(null)
-    } finally {
-      setLoadingManifest(false)
-    }
-  }
-
-  const activeBatchId = String(batchIdInput || batchData?.batch_id || status?.active_batch_id || '')
 
   return (
     <main className="admin-shell">
       <section className="card compact hero-card">
-        <p className="badge">Control Panel</p>
+        <p className="badge">Local Mode</p>
         <h1>Superadmin</h1>
-        <p className="muted">Generate QR batches and manage ZIP download from one place.</p>
+        <p className="muted">QR generation is now local API only (Postman/backend). This screen is status + downloads.</p>
         <a className="logout-link" href="/superadmin/logout">
           Logout
         </a>
@@ -307,10 +221,6 @@ function SuperAdminScreen() {
           </div>
           <div className="admin-status-grid">
             <article className="status-tile">
-              <small>Active Batch ID</small>
-              <strong>{status?.active_batch_id || '-'}</strong>
-            </article>
-            <article className="status-tile">
               <small>Total QR</small>
               <strong>{status?.total_qr ?? 0}</strong>
             </article>
@@ -322,100 +232,18 @@ function SuperAdminScreen() {
               <small>Remaining</small>
               <strong>{status?.remaining ?? 0}</strong>
             </article>
-            <article className="status-tile">
-              <small>Used Count</small>
-              <strong>{status?.used_count ?? 0}</strong>
-            </article>
-            <article className="status-tile">
-              <small>Generated At</small>
-              <time>{formatTimestamp(status?.generated_at)}</time>
-            </article>
-            <article className="status-tile">
-              <small>Updated At</small>
-              <time>{formatTimestamp(status?.updated_at)}</time>
-            </article>
           </div>
-        </section>
-      )}
-
-      <section className="card compact">
-        <h2>Create Batch</h2>
-        <form className="admin-form" onSubmit={generateBatch}>
-          <label htmlFor="count">QR count</label>
-          <div className="row">
-            <input
-              id="count"
-              type="number"
-              min="1"
-              value={count}
-              onChange={(event) => setCount(event.target.value)}
-            />
-            <button type="submit" disabled={loadingGenerate}>
-              {loadingGenerate ? 'Generating...' : 'Generate'}
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <section className="card compact">
-        <h2>Batch Manage</h2>
-        <form className="admin-form" onSubmit={fetchManifest}>
-          <label htmlFor="batchId">Batch ID</label>
-          <div className="row">
-            <select
-              id="batchId"
-              value={batchIdInput}
-              onChange={(event) => setBatchIdInput(event.target.value)}
-            >
-              <option value="">
-                {loadingBatches ? 'Loading batches...' : 'Select batch'}
-              </option>
-              {batches.map((batch) => (
-                <option key={batch.batch_id} value={batch.batch_id}>
-                  {batch.name || `Batch ${batch.batch_id}`}
-                </option>
-              ))}
-            </select>
-            <button type="submit" disabled={loadingManifest}>
-              {loadingManifest ? 'Loading...' : 'Load'}
-            </button>
-          </div>
-        </form>
-        <button
-          type="button"
-          className="secondary-btn"
-          onClick={() => loadBatches(batchIdInput)}
-          disabled={loadingBatches}
-        >
-          {loadingBatches ? 'Refreshing list...' : 'Refresh Batch List'}
-        </button>
-
-        {activeBatchId && (
           <div className="admin-links">
-            <a href={`/batch/${activeBatchId}/download.zip`} target="_blank" rel="noreferrer">
+            <a href="/download.zip" target="_blank" rel="noreferrer">
               Download ZIP
             </a>
-            <a href={`/batch/${activeBatchId}/manifest.json`} target="_blank" rel="noreferrer">
+            <a href="/manifest.json" target="_blank" rel="noreferrer">
               Open Manifest
             </a>
-            <a href={`/batch/${activeBatchId}/qr/1.png`} target="_blank" rel="noreferrer">
+            <a href="/qr/1.png" target="_blank" rel="noreferrer">
               First QR Image
             </a>
           </div>
-        )}
-      </section>
-
-      {batchData && (
-        <section className="card compact">
-          <h2>Generated Response</h2>
-          <pre>{JSON.stringify(batchData, null, 2)}</pre>
-        </section>
-      )}
-
-      {manifestData && (
-        <section className="card compact">
-          <h2>Manifest Details</h2>
-          <pre>{JSON.stringify(manifestData, null, 2)}</pre>
         </section>
       )}
 

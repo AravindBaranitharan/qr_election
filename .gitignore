@@ -6,7 +6,6 @@ flask_stdout.log
 flask_stderr.log
 
 generated_qr/
-qr_state.json
 
 frontend/node_modules/
 frontend/.vite/

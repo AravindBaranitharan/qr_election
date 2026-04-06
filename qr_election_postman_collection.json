@@ -14,12 +14,12 @@
       "value": "5"
     },
     {
-      "key": "batchId",
-      "value": "replace_with_batch_id_from_generate_response"
-    },
-    {
       "key": "tokenHex",
       "value": "replace_with_token_from_generate_response"
+    },
+    {
+      "key": "serial",
+      "value": "1"
     }
   ],
   "item": [
@@ -149,18 +149,16 @@
       "response": []
     },
     {
-      "name": "Batch Manifest",
+      "name": "Manifest",
       "request": {
         "method": "GET",
         "header": [],
         "url": {
-          "raw": "{{baseUrl}}/batch/{{batchId}}/manifest.json",
+          "raw": "{{baseUrl}}/manifest.json",
           "host": [
             "{{baseUrl}}"
           ],
           "path": [
-            "batch",
-            "{{batchId}}",
             "manifest.json"
           ]
         }
@@ -168,19 +166,35 @@
       "response": []
     },
     {
-      "name": "Batch Download Zip",
+      "name": "Download Zip",
       "request": {
         "method": "GET",
         "header": [],
         "url": {
-          "raw": "{{baseUrl}}/batch/{{batchId}}/download.zip",
+          "raw": "{{baseUrl}}/download.zip",
           "host": [
             "{{baseUrl}}"
           ],
           "path": [
-            "batch",
-            "{{batchId}}",
             "download.zip"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "QR Image By Serial",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/qr/{{serial}}.png",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "qr",
+            "{{serial}}.png"
           ]
         }
       },
