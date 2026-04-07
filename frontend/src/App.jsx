@@ -66,12 +66,18 @@ function ResultCard({ result, error, loading }) {
       <h2>{accepted ? 'Accepted' : 'Not Accepted'}</h2>
       <p className="muted">{result?.message || error || 'Unable to process this QR'}</p>
       <div className="scan-meta">
-        <strong>{result?.count ?? '-'}</strong>
-        <small>Accepted</small>
-        <strong>{result?.total ?? '-'}</strong>
-        <small>Total</small>
-        <strong>{result?.remaining ?? '-'}</strong>
-        <small>Remaining</small>
+        <div className="scan-metric">
+          <strong>{result?.count ?? '-'}</strong>
+          <small>Accepted</small>
+        </div>
+        <div className="scan-metric">
+          <strong>{result?.remaining ?? '-'}</strong>
+          <small>Remaining</small>
+        </div>
+        <div className="scan-metric">
+          <strong>{result?.total ?? '-'}</strong>
+          <small>Total</small>
+        </div>
       </div>
     </section>
   )

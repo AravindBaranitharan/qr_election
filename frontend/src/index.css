@@ -481,18 +481,26 @@ button:disabled {
 .scan-meta {
   margin-top: 12px;
   width: 100%;
-  max-width: 320px;
+  max-width: 220px;
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 6px;
 }
 
-.scan-meta strong,
-.scan-meta small {
+.scan-metric {
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.scan-metric strong,
+.scan-metric small {
+  display: block;
   text-align: center;
 }
 
-.scan-meta small {
+.scan-metric small {
   color: var(--muted);
   font-size: 0.75rem;
 }
