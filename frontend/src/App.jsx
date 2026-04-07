@@ -70,6 +70,8 @@ function ResultCard({ result, error, loading }) {
         <small>Accepted</small>
         <strong>{result?.total ?? '-'}</strong>
         <small>Total</small>
+        <strong>{result?.remaining ?? '-'}</strong>
+        <small>Remaining</small>
       </div>
     </section>
   )

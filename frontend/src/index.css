@@ -481,9 +481,9 @@ button:disabled {
 .scan-meta {
   margin-top: 12px;
   width: 100%;
-  max-width: 240px;
+  max-width: 320px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 6px;
 }
 
