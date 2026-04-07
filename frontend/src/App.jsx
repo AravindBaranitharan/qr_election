@@ -10,6 +10,10 @@ function isSuperAdminPath() {
   return window.location.pathname === '/superadmin' || window.location.pathname.startsWith('/superadmin/')
 }
 
+function isDatabasePath() {
+  return window.location.pathname === '/database' || window.location.pathname === '/database/'
+}
+
 function extractToken(rawValue) {
   const value = String(rawValue || '').trim()
   if (!value) return null
@@ -26,6 +30,14 @@ function extractToken(rawValue) {
     return pathMatch ? pathMatch[1].toLowerCase() : null
   } catch {
     return null
+  }
+}
+
+function toPrettyJson(value) {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
   }
 }
 
@@ -327,6 +339,245 @@ function SuperAdminScreen() {
         <ScanTimelineChart points={timelinePoints} />
       </section>
 
+      <section className="card compact">
+        <h2>Dashboard Routes</h2>
+        <div className="admin-links">
+          <a href="/database">Database Details</a>
+        </div>
+      </section>
+
+      {error && (
+        <section className="card compact error-box">
+          <p>{error}</p>
+        </section>
+      )}
+    </main>
+  )
+}
+
+function DatabaseScreen() {
+  const [details, setDetails] = useState(null)
+  const [error, setError] = useState('')
+  const [saveMessage, setSaveMessage] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [formData, setFormData] = useState({
+    total_qr: '',
+    true_count: '',
+    next_serial: '',
+    scanned_serials: '',
+  })
+
+  async function loadDatabaseDetails() {
+    try {
+      const response = await fetch('/database_details', { cache: 'no-store' })
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(payload?.message || 'unable to load database details')
+      }
+      setDetails(payload)
+      setError('')
+    } catch (detailsError) {
+      setError(String(detailsError))
+    }
+  }
+
+  function applyFormFromState(state) {
+    setFormData({
+      total_qr: String(Number(state?.total_qr || 0)),
+      true_count: String(Number(state?.true_count || 0)),
+      next_serial: String(Number(state?.next_serial || 1)),
+      scanned_serials: Array.isArray(state?.scanned_serials) ? state.scanned_serials.join(', ') : '',
+    })
+  }
+
+  function onFieldChange(key, value) {
+    setFormData((prev) => ({ ...prev, [key]: value }))
+  }
+
+  async function saveLiveState(event) {
+    event.preventDefault()
+    setSaving(true)
+    setSaveMessage('')
+    try {
+      const response = await fetch('/database_state_update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({
+          total_qr: Number(formData.total_qr || 0),
+          true_count: Number(formData.true_count || 0),
+          next_serial: Number(formData.next_serial || 1),
+          scanned_serials: formData.scanned_serials,
+        }),
+      })
+      const payload = await response.json()
+      if (!response.ok || !payload?.true) {
+        throw new Error(payload?.message || 'unable to save state')
+      }
+      setSaveMessage('Live database state updated.')
+      setDetails((prev) => ({ ...prev, state: payload?.state || prev?.state }))
+      applyFormFromState(payload?.state || {})
+      await loadDatabaseDetails()
+    } catch (saveError) {
+      setSaveMessage(String(saveError))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  useEffect(() => {
+    loadDatabaseDetails()
+    const timer = window.setInterval(loadDatabaseDetails, 4000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    if (details?.state) {
+      applyFormFromState(details.state)
+    }
+  }, [details?.state])
+
+  const storage = details?.storage || {}
+  const environment = details?.environment || {}
+  const database = details?.database || {}
+  const connection = database?.connection || {}
+  const state = details?.state || {}
+
+  return (
+    <main className="admin-shell">
+      <section className="card compact">
+        <div className="status-head">
+          <h1>Database</h1>
+          <div className="admin-links">
+            <a href="/superadmin">Back</a>
+            <a href="/database/logout">Lock</a>
+          </div>
+        </div>
+        <p className="muted">Full database diagnostics and current QR state.</p>
+      </section>
+
+      {details && (
+        <>
+          <section className="card compact">
+            <h2>Connection Summary</h2>
+            <div className="admin-status-grid">
+              <article className="status-tile">
+                <small>Storage Mode</small>
+                <strong>{storage?.mode || '-'}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Environment</small>
+                <strong>{environment?.name || '-'}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Connected</small>
+                <strong>{connection?.connected ? 'yes' : 'no'}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Host</small>
+                <strong>{database?.host || '-'}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Database</small>
+                <strong>{database?.database || '-'}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Table</small>
+                <strong>{storage?.table_name || '-'}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Ping Interval</small>
+                <strong>{connection?.ping_interval_seconds ? `${connection.ping_interval_seconds}s` : '-'}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Last Ping</small>
+                <strong>{connection?.last_checked_at || '-'}</strong>
+              </article>
+            </div>
+          </section>
+
+          <section className="card compact">
+            <h2>State Snapshot</h2>
+            <div className="admin-status-grid">
+              <article className="status-tile">
+                <small>Total QR</small>
+                <strong>{Number(state?.total_qr || 0)}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Accepted</small>
+                <strong>{Number(state?.true_count || 0)}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Next Serial</small>
+                <strong>{Number(state?.next_serial || 0)}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Scanned Serials</small>
+                <strong>{Array.isArray(state?.scanned_serials) ? state.scanned_serials.length : 0}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Manifest Count</small>
+                <strong>{Number(details?.manifest_count || 0)}</strong>
+              </article>
+              <article className="status-tile">
+                <small>Updated At</small>
+                <strong>{details?.updated_at || '-'}</strong>
+              </article>
+            </div>
+          </section>
+
+          <section className="card compact">
+            <h2>Edit Live State</h2>
+            <p className="muted">
+              Update values and save. `scanned_serials` expects comma-separated serial numbers.
+            </p>
+            <form className="admin-form" onSubmit={saveLiveState}>
+              <label htmlFor="total_qr">Total QR</label>
+              <input
+                id="total_qr"
+                value={formData.total_qr}
+                onChange={(event) => onFieldChange('total_qr', event.target.value)}
+                inputMode="numeric"
+              />
+
+              <label htmlFor="true_count">Accepted Count</label>
+              <input
+                id="true_count"
+                value={formData.true_count}
+                onChange={(event) => onFieldChange('true_count', event.target.value)}
+                inputMode="numeric"
+              />
+
+              <label htmlFor="next_serial">Next Serial</label>
+              <input
+                id="next_serial"
+                value={formData.next_serial}
+                onChange={(event) => onFieldChange('next_serial', event.target.value)}
+                inputMode="numeric"
+              />
+
+              <label htmlFor="scanned_serials">Scanned Serials</label>
+              <input
+                id="scanned_serials"
+                value={formData.scanned_serials}
+                onChange={(event) => onFieldChange('scanned_serials', event.target.value)}
+                placeholder="1, 2, 7, 22"
+              />
+
+              <button type="submit" disabled={saving}>
+                {saving ? 'Saving...' : 'Save Live State'}
+              </button>
+              {saveMessage && <p className="mini">{saveMessage}</p>}
+            </form>
+          </section>
+
+          <section className="card compact">
+            <h2>Raw Details</h2>
+            <pre>{toPrettyJson(details)}</pre>
+          </section>
+        </>
+      )}
+
       {error && (
         <section className="card compact error-box">
           <p>{error}</p>
@@ -338,9 +589,11 @@ function SuperAdminScreen() {
 
 function App() {
   const [token] = useState(() => readTokenFromPath())
+  const [database] = useState(() => isDatabasePath())
   const [superadmin] = useState(() => isSuperAdminPath())
 
   if (token) return <SubmitOnlyScreen token={token} />
+  if (database) return <DatabaseScreen />
   if (superadmin) return <SuperAdminScreen />
   return <LandingScannerScreen />
 }

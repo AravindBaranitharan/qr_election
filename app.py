@@ -4,10 +4,13 @@ import hmac
 import io
 import json
 import os
+import re
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
+from urllib.parse import parse_qs, urlparse
 
 import qrcode
 from PIL import Image, ImageDraw, ImageFont
@@ -22,6 +25,14 @@ from flask import (
     session,
     url_for,
 )
+
+try:
+    import psycopg2
+    from psycopg2.extras import Json, RealDictCursor
+except ImportError:
+    psycopg2 = None
+    Json = None
+    RealDictCursor = None
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -67,6 +78,7 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 SECRET_KEY = os.getenv("QR_SECRET", "replace-this-with-a-long-secret-key")
 SUPERADMIN_PASSWORD = "22012004"
 SUPERADMIN_SESSION_KEY = "superadmin_logged_in"
+DATABASE_SESSION_KEY = "database_route_logged_in"
 QR_64_KEY_ENV = "QR_64_KEY"
 CIPHER_CODE_LENGTH = 64
 DATA_ROOT = configured_data_root()
@@ -78,6 +90,7 @@ STATE_LOCK = Lock()
 TOKEN_VERSION = "1"
 STATE_OUTPUT_DIR = "generated_qr"
 STATE_MANIFEST_PATH = "generated_qr/manifest.json"
+DEFAULT_STATE_TABLE = "qr_state_store"
 
 app.secret_key = hashlib.sha256(f"{SECRET_KEY}-session".encode("utf-8")).hexdigest()
 
@@ -109,6 +122,85 @@ def empty_state():
         "output_dir": STATE_OUTPUT_DIR,
         "manifest_file": STATE_MANIFEST_PATH,
     }
+
+
+# State storage strategy:
+# - Local/dev/test environments keep using qr_state.json (easy local workflow).
+# - Production/Render environments switch to PostgreSQL for durable shared state.
+def parse_bool(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def configured_database_route_password():
+    raw = str(os.getenv("DB_ROUTE_PASSWORD", "")).strip()
+    return raw or SUPERADMIN_PASSWORD
+
+
+def configured_runtime_environment():
+    return str(
+        os.getenv("QR_ENV")
+        or os.getenv("APP_ENV")
+        or os.getenv("ENVIRONMENT")
+        or os.getenv("FLASK_ENV")
+        or os.getenv("PYTHON_ENV")
+        or ("production" if parse_bool(os.getenv("RENDER")) else "local")
+    ).strip().lower()
+
+
+def is_local_environment():
+    return configured_runtime_environment() in {"", "local", "development", "dev", "test"}
+
+
+def configured_state_table_name():
+    raw_name = str(os.getenv("QR_STATE_TABLE", DEFAULT_STATE_TABLE)).strip() or DEFAULT_STATE_TABLE
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw_name):
+        return raw_name
+    return DEFAULT_STATE_TABLE
+
+
+def configured_state_backend():
+    forced = str(os.getenv("QR_STATE_BACKEND", "")).strip().lower()
+    if forced in {"json", "file"}:
+        return "json", "forced by QR_STATE_BACKEND"
+    if forced in {"db", "database", "postgres", "postgresql"}:
+        return "database", "forced by QR_STATE_BACKEND"
+    if parse_bool(os.getenv("RENDER")):
+        return "database", "detected Render environment"
+    if is_local_environment():
+        return "json", "detected local environment"
+    return "database", "detected production environment"
+
+
+DATABASE_URL = str(os.getenv("DATABASE_URL", "")).strip()
+DATABASE_SSLMODE = str(os.getenv("DB_SSLMODE", "require")).strip() or "require"
+STATE_TABLE_NAME = configured_state_table_name()
+STATE_BACKEND, STATE_BACKEND_REASON = configured_state_backend()
+STATE_BACKEND_WARNINGS = []
+if STATE_BACKEND == "database" and not DATABASE_URL:
+    STATE_BACKEND_WARNINGS.append("DATABASE_URL is missing")
+if STATE_BACKEND == "database" and psycopg2 is None:
+    STATE_BACKEND_WARNINGS.append("psycopg2 is not installed")
+USE_DATABASE_STATE = STATE_BACKEND == "database" and not STATE_BACKEND_WARNINGS
+DB_ROUTE_PASSWORD = configured_database_route_password()
+DB_PING_INTERVAL_SECONDS = max(10, min(parse_int(os.getenv("DB_PING_INTERVAL_SECONDS", 30), 30), 3600))
+DB_HEALTH_LOCK = Lock()
+DB_HEALTH_STATUS = {
+    "connected": False,
+    "message": "not checked yet",
+    "checks": 0,
+    "database_time": None,
+    "latency_ms": None,
+    "last_checked_at": None,
+    "last_success_at": None,
+}
+DB_PING_THREAD = None
 
 
 def read_json_file(path):
@@ -213,7 +305,9 @@ def normalize_state(state):
         for item in manifest:
             if isinstance(item, dict):
                 max_serial = max(max_serial, int(item.get("serial", 0) or 0))
-        next_serial = max_serial + 1 if max_serial > 0 else total_qr + 1
+        baseline_next_serial = max_serial + 1 if max_serial > 0 else total_qr + 1
+        requested_next_serial = int(state.get("next_serial", 0) or 0)
+        next_serial = max(baseline_next_serial, requested_next_serial)
     else:
         next_serial = int(state.get("next_serial", 0) or 0)
         if next_serial <= 0:
@@ -231,16 +325,419 @@ def normalize_state(state):
     return normalized
 
 
-def load_state():
+def database_connection():
+    if psycopg2 is None:
+        raise RuntimeError("psycopg2 is not installed")
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is missing")
+
+    connect_args = {"dsn": DATABASE_URL, "connect_timeout": 5}
+    if "sslmode=" not in DATABASE_URL.lower():
+        connect_args["sslmode"] = DATABASE_SSLMODE
+    return psycopg2.connect(**connect_args)
+
+
+def ensure_database_state_row():
+    if not USE_DATABASE_STATE:
+        return
+
+    with database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {STATE_TABLE_NAME} (
+                    id SMALLINT PRIMARY KEY CHECK (id = 1),
+                    total_qr INTEGER NOT NULL DEFAULT 0,
+                    true_count INTEGER NOT NULL DEFAULT 0,
+                    scanned_serials JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    next_serial INTEGER NOT NULL DEFAULT 1,
+                    output_dir TEXT NOT NULL,
+                    manifest_file TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cursor.execute(
+                f"""
+                INSERT INTO {STATE_TABLE_NAME}
+                    (id, total_qr, true_count, scanned_serials, next_serial, output_dir, manifest_file)
+                VALUES (1, 0, 0, %s, 1, %s, %s)
+                ON CONFLICT (id) DO NOTHING
+                """,
+                (Json([]), STATE_OUTPUT_DIR, STATE_MANIFEST_PATH),
+            )
+
+
+def load_state_from_file():
     raw = read_json_file(STATE_FILE) if STATE_FILE.exists() else {}
     state = normalize_state(raw)
-    save_state(state)
+    save_state_to_file(state)
     return state
 
 
-def save_state(state):
+def save_state_to_file(state):
+    normalized = normalize_state(state)
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(normalize_state(state), indent=2), encoding="utf-8")
+    STATE_FILE.write_text(json.dumps(normalized, indent=2), encoding="utf-8")
+    return normalized
+
+
+def load_state_from_database():
+    ensure_database_state_row()
+
+    with database_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                f"""
+                SELECT total_qr, true_count, scanned_serials, next_serial, output_dir, manifest_file
+                FROM {STATE_TABLE_NAME}
+                WHERE id = 1
+                """
+            )
+            row = cursor.fetchone() or {}
+    return normalize_state(dict(row))
+
+
+def save_state_to_database(state):
+    normalized = normalize_state(state)
+    ensure_database_state_row()
+
+    with database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO {STATE_TABLE_NAME}
+                    (id, total_qr, true_count, scanned_serials, next_serial, output_dir, manifest_file, updated_at)
+                VALUES
+                    (1, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    total_qr = EXCLUDED.total_qr,
+                    true_count = EXCLUDED.true_count,
+                    scanned_serials = EXCLUDED.scanned_serials,
+                    next_serial = EXCLUDED.next_serial,
+                    output_dir = EXCLUDED.output_dir,
+                    manifest_file = EXCLUDED.manifest_file,
+                    updated_at = NOW()
+                """,
+                (
+                    int(normalized.get("total_qr", 0) or 0),
+                    int(normalized.get("true_count", 0) or 0),
+                    Json(normalized.get("scanned_serials", [])),
+                    int(normalized.get("next_serial", 1) or 1),
+                    str(normalized.get("output_dir", STATE_OUTPUT_DIR)),
+                    str(normalized.get("manifest_file", STATE_MANIFEST_PATH)),
+                ),
+            )
+    return normalized
+
+
+def state_storage_mode():
+    return "database" if USE_DATABASE_STATE else "json"
+
+
+# Unified state access layer used by scan/generate/status APIs.
+# This keeps all state management in one place while switching backend by environment.
+def load_state():
+    if USE_DATABASE_STATE:
+        return load_state_from_database()
+    return load_state_from_file()
+
+
+def save_state(state):
+    if USE_DATABASE_STATE:
+        return save_state_to_database(state)
+    return save_state_to_file(state)
+
+
+def parsed_database_details():
+    if not DATABASE_URL:
+        return {
+            "configured": False,
+            "scheme": None,
+            "host": None,
+            "port": None,
+            "database": None,
+            "username": None,
+            "has_password": False,
+            "sslmode": DATABASE_SSLMODE,
+        }
+
+    parsed = urlparse(DATABASE_URL)
+    query = parse_qs(parsed.query)
+    sslmode = query.get("sslmode", [DATABASE_SSLMODE])[0]
+    return {
+        "configured": True,
+        "scheme": parsed.scheme or "postgresql",
+        "host": parsed.hostname,
+        "port": parsed.port,
+        "database": parsed.path.lstrip("/") or None,
+        "username": parsed.username,
+        "has_password": bool(parsed.password),
+        "sslmode": sslmode,
+    }
+
+
+def is_database_authenticated():
+    return bool(session.get(DATABASE_SESSION_KEY))
+
+
+def build_database_login_page(error_message=""):
+    safe_error = html.escape(error_message or "", quote=False)
+    error_block = f'<p class="error">{safe_error}</p>' if safe_error else ""
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Database Access</title>
+  <style>
+    :root {{
+      --ink: #11233a;
+      --muted: #4b5d73;
+      --line: rgba(20, 34, 55, 0.16);
+      --card: rgba(255, 255, 255, 0.92);
+      --accent: #0b75b7;
+      --bg1: #fff6dd;
+      --bg2: #e3f3ff;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      color: var(--ink);
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(80% 60% at 0% 0%, #fff5d3 0%, transparent 65%),
+        radial-gradient(70% 80% at 100% 100%, #d9eeff 0%, transparent 70%),
+        linear-gradient(155deg, var(--bg1), var(--bg2));
+    }}
+    .card {{
+      width: min(430px, 100%);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 14px 26px rgba(19, 47, 74, 0.09);
+    }}
+    h1 {{
+      margin: 0 0 8px;
+      font-size: 1.4rem;
+      line-height: 1.2;
+    }}
+    p {{
+      margin: 0 0 12px;
+      color: var(--muted);
+    }}
+    label {{
+      display: block;
+      font-size: 0.87rem;
+      color: var(--muted);
+      margin-bottom: 7px;
+    }}
+    input {{
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 11px 12px;
+      font: inherit;
+      color: var(--ink);
+      margin-bottom: 10px;
+    }}
+    button {{
+      width: 100%;
+      border: 0;
+      border-radius: 12px;
+      padding: 11px 14px;
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      background: linear-gradient(120deg, var(--accent), #1d92cf);
+      cursor: pointer;
+    }}
+    .error {{
+      color: #ad2e2c;
+      background: #ffeceb;
+      border: 1px solid #f1b0ad;
+      border-radius: 10px;
+      padding: 9px 10px;
+      margin-bottom: 10px;
+    }}
+  </style>
+</head>
+<body>
+  <form class="card" method="post" action="/database">
+    <h1>Database Route Lock</h1>
+    <p>Enter password to access live database controls.</p>
+    {error_block}
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required autofocus />
+    <button type="submit">Open Database</button>
+  </form>
+</body>
+</html>"""
+
+
+def normalize_serial_list(raw_value):
+    if isinstance(raw_value, str):
+        parts = [part.strip() for part in raw_value.split(",")]
+        items = [part for part in parts if part]
+    elif isinstance(raw_value, list):
+        items = raw_value
+    else:
+        items = []
+
+    serials = []
+    seen = set()
+    for value in items:
+        try:
+            serial = int(value)
+        except (TypeError, ValueError):
+            continue
+        if serial <= 0 or serial in seen:
+            continue
+        seen.add(serial)
+        serials.append(serial)
+    return sorted(serials)
+
+
+def apply_live_state_updates(base_state, payload):
+    if not isinstance(base_state, dict):
+        base_state = empty_state()
+    if not isinstance(payload, dict):
+        return base_state
+
+    state = dict(base_state)
+    if "total_qr" in payload:
+        state["total_qr"] = max(parse_int(payload.get("total_qr"), state.get("total_qr", 0)), 0)
+    if "true_count" in payload:
+        state["true_count"] = max(parse_int(payload.get("true_count"), state.get("true_count", 0)), 0)
+    if "next_serial" in payload:
+        state["next_serial"] = max(parse_int(payload.get("next_serial"), state.get("next_serial", 1)), 1)
+    if "scanned_serials" in payload:
+        state["scanned_serials"] = normalize_serial_list(payload.get("scanned_serials"))
+    state["output_dir"] = STATE_OUTPUT_DIR
+    state["manifest_file"] = STATE_MANIFEST_PATH
+    return state
+
+
+def perform_database_ping():
+    if not DATABASE_URL:
+        return {
+            "connected": False,
+            "message": "DATABASE_URL is missing",
+            "database_time": None,
+            "latency_ms": None,
+            "checked_at": utc_now(),
+        }
+    if psycopg2 is None:
+        return {
+            "connected": False,
+            "message": "psycopg2 is not installed",
+            "database_time": None,
+            "latency_ms": None,
+            "checked_at": utc_now(),
+        }
+
+    started = time.perf_counter()
+    try:
+        with database_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT NOW()")
+                row = cursor.fetchone() or [None]
+        db_now = row[0].isoformat() if row[0] else None
+        return {
+            "connected": True,
+            "message": "ok",
+            "database_time": db_now,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+            "checked_at": utc_now(),
+        }
+    except Exception as exc:
+        return {
+            "connected": False,
+            "message": str(exc),
+            "database_time": None,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+            "checked_at": utc_now(),
+        }
+
+
+def update_database_health(status):
+    with DB_HEALTH_LOCK:
+        DB_HEALTH_STATUS["connected"] = bool(status.get("connected"))
+        DB_HEALTH_STATUS["message"] = str(status.get("message") or "")
+        DB_HEALTH_STATUS["database_time"] = status.get("database_time")
+        DB_HEALTH_STATUS["latency_ms"] = status.get("latency_ms")
+        DB_HEALTH_STATUS["last_checked_at"] = status.get("checked_at") or utc_now()
+        DB_HEALTH_STATUS["checks"] = int(DB_HEALTH_STATUS.get("checks", 0) or 0) + 1
+        if bool(status.get("connected")):
+            DB_HEALTH_STATUS["last_success_at"] = DB_HEALTH_STATUS["last_checked_at"]
+
+
+def current_database_health():
+    with DB_HEALTH_LOCK:
+        return dict(DB_HEALTH_STATUS)
+
+
+def database_ping_worker():
+    while True:
+        update_database_health(perform_database_ping())
+        time.sleep(DB_PING_INTERVAL_SECONDS)
+
+
+def start_database_ping_worker():
+    global DB_PING_THREAD
+    if DB_PING_THREAD is not None and DB_PING_THREAD.is_alive():
+        return
+    DB_PING_THREAD = Thread(target=database_ping_worker, name="db-ping-worker", daemon=True)
+    DB_PING_THREAD.start()
+
+
+start_database_ping_worker()
+
+
+def database_connection_probe():
+    health = current_database_health()
+    if int(health.get("checks", 0) or 0) <= 0:
+        update_database_health(perform_database_ping())
+        health = current_database_health()
+    health["warnings"] = STATE_BACKEND_WARNINGS
+    health["ping_interval_seconds"] = DB_PING_INTERVAL_SECONDS
+    return health
+
+
+def state_backend_report(state):
+    scanned_serials = state.get("scanned_serials", []) if isinstance(state, dict) else []
+    manifest = load_manifest()
+    return {
+        "true": True,
+        "environment": {
+            "name": configured_runtime_environment(),
+            "local": is_local_environment(),
+            "backend_reason": STATE_BACKEND_REASON,
+        },
+        "storage": {
+            "mode": state_storage_mode(),
+            "requested_backend": STATE_BACKEND,
+            "warnings": STATE_BACKEND_WARNINGS,
+            "table_name": STATE_TABLE_NAME,
+            "state_file": str(STATE_FILE.resolve()),
+            "manifest_file": str(MANIFEST_FILE.resolve()),
+            "scan_log_file": str(SCAN_LOG_FILE.resolve()),
+        },
+        "database": {
+            **parsed_database_details(),
+            "connection": database_connection_probe(),
+        },
+        "state": state,
+        "manifest_count": len(manifest),
+        "scanned_serial_count": len(scanned_serials) if isinstance(scanned_serials, list) else 0,
+        "updated_at": utc_now(),
+    }
 
 
 def build_keystream(secret, length):
@@ -558,7 +1055,7 @@ def is_superadmin_authenticated():
 
 def build_superadmin_login_page(next_path="/superadmin", error_message=""):
     safe_next = str(next_path or "/superadmin")
-    if not safe_next.startswith("/superadmin"):
+    if not (safe_next.startswith("/superadmin") or safe_next.startswith("/database")):
         safe_next = "/superadmin"
 
     safe_next_query = html.escape(safe_next, quote=True)
@@ -678,12 +1175,20 @@ def disable_api_caching(response):
             "/qr/",
             "/download.zip",
             "/superadmin",
+            "/database",
+            "/database_details",
+            "/database_state_update",
         )
     ):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     return response
+
+
+@app.before_request
+def ensure_background_workers():
+    start_database_ping_worker()
 
 
 @app.get("/")
@@ -702,6 +1207,7 @@ def index():
             ],
             "domain_name": configured_domain_name(),
             "status_url": "/status",
+            "state_storage": state_storage_mode(),
             "count": state.get("true_count", 0),
             "total": state.get("total_qr", 0),
             "over": state.get("total_qr", 0) > 0 and state.get("true_count", 0) >= state.get("total_qr", 0),
@@ -721,7 +1227,12 @@ def superadmin():
 
         if hmac.compare_digest(password, SUPERADMIN_PASSWORD):
             session[SUPERADMIN_SESSION_KEY] = True
-            safe_next = requested_next if str(requested_next).startswith("/superadmin") else "/superadmin"
+            safe_next_value = str(requested_next or "")
+            safe_next = (
+                safe_next_value
+                if (safe_next_value.startswith("/superadmin") or safe_next_value.startswith("/database"))
+                else "/superadmin"
+            )
             return redirect(safe_next)
 
         return (
@@ -750,6 +1261,7 @@ def superadmin():
 @app.get("/superadmin/logout")
 def superadmin_logout():
     session.pop(SUPERADMIN_SESSION_KEY, None)
+    session.pop(DATABASE_SESSION_KEY, None)
     return redirect(url_for("superadmin"))
 
 
@@ -762,6 +1274,71 @@ def superadmin_spa(path):
     if frontend is not None:
         return frontend
     return jsonify({"true": False, "message": "frontend not built"}), 404
+
+
+@app.route("/database", methods=["GET", "POST"])
+def database_page():
+    if not is_superadmin_authenticated():
+        return redirect(url_for("superadmin", next="/database"))
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        password = (request.form.get("password") or payload.get("password") or "").strip()
+        if hmac.compare_digest(password, DB_ROUTE_PASSWORD):
+            session[DATABASE_SESSION_KEY] = True
+            return redirect(url_for("database_page"))
+        return (
+            Response(build_database_login_page(error_message="Wrong password"), mimetype="text/html"),
+            401,
+        )
+
+    if not is_database_authenticated():
+        return Response(build_database_login_page(), mimetype="text/html")
+
+    frontend = serve_frontend_index()
+    if frontend is not None:
+        return frontend
+    return jsonify({"true": False, "message": "frontend not built"}), 404
+
+
+@app.get("/database/logout")
+def database_logout():
+    session.pop(DATABASE_SESSION_KEY, None)
+    return redirect(url_for("database_page"))
+
+
+@app.get("/database_details")
+def database_details():
+    if not is_superadmin_authenticated():
+        return jsonify({"true": False, "message": "superadmin login required"}), 401
+    if not is_database_authenticated():
+        return jsonify({"true": False, "message": "database password required"}), 401
+
+    with STATE_LOCK:
+        state = load_state()
+    return jsonify(state_backend_report(state))
+
+
+@app.post("/database_state_update")
+def database_state_update():
+    if not is_superadmin_authenticated():
+        return jsonify({"true": False, "message": "superadmin login required"}), 401
+    if not is_database_authenticated():
+        return jsonify({"true": False, "message": "database password required"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    with STATE_LOCK:
+        state = load_state()
+        updated_state = apply_live_state_updates(state, payload)
+        saved_state = save_state(updated_state)
+    return jsonify(
+        {
+            "true": True,
+            "message": "state updated",
+            "storage_mode": state_storage_mode(),
+            "state": saved_state,
+        }
+    )
 
 
 @app.route("/generate_qr_local", methods=["POST"])
@@ -935,6 +1512,7 @@ def status():
             "true_count": count,
             "remaining": max(total - count, 0),
             "over": total > 0 and count >= total,
+            "state_storage": state_storage_mode(),
             "output_dir": state.get("output_dir"),
             "manifest_file": state.get("manifest_file"),
         }
