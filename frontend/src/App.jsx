@@ -360,11 +360,14 @@ function DatabaseScreen() {
   const [error, setError] = useState('')
   const [saveMessage, setSaveMessage] = useState('')
   const [saving, setSaving] = useState(false)
+  const [formInitialized, setFormInitialized] = useState(false)
   const [formData, setFormData] = useState({
     total_qr: '',
-    true_count: '',
     next_serial: '',
-    scanned_serials: '',
+    add_serials: '',
+    remove_serials: '',
+    remove_range_start: '',
+    remove_range_end: '',
   })
 
   async function loadDatabaseDetails() {
@@ -384,10 +387,13 @@ function DatabaseScreen() {
   function applyFormFromState(state) {
     setFormData({
       total_qr: String(Number(state?.total_qr || 0)),
-      true_count: String(Number(state?.true_count || 0)),
       next_serial: String(Number(state?.next_serial || 1)),
-      scanned_serials: Array.isArray(state?.scanned_serials) ? state.scanned_serials.join(', ') : '',
+      add_serials: '',
+      remove_serials: '',
+      remove_range_start: '',
+      remove_range_end: '',
     })
+    setFormInitialized(true)
   }
 
   function onFieldChange(key, value) {
@@ -405,16 +411,20 @@ function DatabaseScreen() {
         cache: 'no-store',
         body: JSON.stringify({
           total_qr: Number(formData.total_qr || 0),
-          true_count: Number(formData.true_count || 0),
           next_serial: Number(formData.next_serial || 1),
-          scanned_serials: formData.scanned_serials,
+          add_serials: formData.add_serials,
+          remove_serials: formData.remove_serials,
+          remove_range_start: formData.remove_range_start,
+          remove_range_end: formData.remove_range_end,
         }),
       })
       const payload = await response.json()
       if (!response.ok || !payload?.true) {
         throw new Error(payload?.message || 'unable to save state')
       }
-      setSaveMessage('Live database state updated.')
+      setSaveMessage(
+        `Live database state updated. Added ${Number(payload?.added_count || 0)}, removed ${Number(payload?.removed_count || 0)}.`,
+      )
       setDetails((prev) => ({ ...prev, state: payload?.state || prev?.state }))
       applyFormFromState(payload?.state || {})
       await loadDatabaseDetails()
@@ -432,10 +442,10 @@ function DatabaseScreen() {
   }, [])
 
   useEffect(() => {
-    if (details?.state) {
+    if (details?.state && !formInitialized) {
       applyFormFromState(details.state)
     }
-  }, [details?.state])
+  }, [details?.state, formInitialized])
 
   const storage = details?.storage || {}
   const environment = details?.environment || {}
@@ -527,9 +537,9 @@ function DatabaseScreen() {
           </section>
 
           <section className="card compact">
-            <h2>Edit Live State</h2>
+            <h2>Edit Serials</h2>
             <p className="muted">
-              Update values and save. `scanned_serials` expects comma-separated serial numbers.
+              Add or remove serials with commas, and remove a range by start/end. No full array editing.
             </p>
             <form className="admin-form" onSubmit={saveLiveState}>
               <label htmlFor="total_qr">Total QR</label>
@@ -537,14 +547,6 @@ function DatabaseScreen() {
                 id="total_qr"
                 value={formData.total_qr}
                 onChange={(event) => onFieldChange('total_qr', event.target.value)}
-                inputMode="numeric"
-              />
-
-              <label htmlFor="true_count">Accepted Count</label>
-              <input
-                id="true_count"
-                value={formData.true_count}
-                onChange={(event) => onFieldChange('true_count', event.target.value)}
                 inputMode="numeric"
               />
 
@@ -556,16 +558,42 @@ function DatabaseScreen() {
                 inputMode="numeric"
               />
 
-              <label htmlFor="scanned_serials">Scanned Serials</label>
+              <label htmlFor="add_serials">Add Serials (comma-separated)</label>
               <input
-                id="scanned_serials"
-                value={formData.scanned_serials}
-                onChange={(event) => onFieldChange('scanned_serials', event.target.value)}
+                id="add_serials"
+                value={formData.add_serials}
+                onChange={(event) => onFieldChange('add_serials', event.target.value)}
                 placeholder="1, 2, 7, 22"
               />
 
+              <label htmlFor="remove_serials">Remove Serials (comma-separated)</label>
+              <input
+                id="remove_serials"
+                value={formData.remove_serials}
+                onChange={(event) => onFieldChange('remove_serials', event.target.value)}
+                placeholder="3, 4, 8"
+              />
+
+              <label htmlFor="remove_range_start">Remove Range Start</label>
+              <input
+                id="remove_range_start"
+                value={formData.remove_range_start}
+                onChange={(event) => onFieldChange('remove_range_start', event.target.value)}
+                inputMode="numeric"
+                placeholder="100"
+              />
+
+              <label htmlFor="remove_range_end">Remove Range End</label>
+              <input
+                id="remove_range_end"
+                value={formData.remove_range_end}
+                onChange={(event) => onFieldChange('remove_range_end', event.target.value)}
+                inputMode="numeric"
+                placeholder="150"
+              />
+
               <button type="submit" disabled={saving}>
-                {saving ? 'Saving...' : 'Save Live State'}
+                {saving ? 'Applying...' : 'Apply Changes'}
               </button>
               {saveMessage && <p className="mini">{saveMessage}</p>}
             </form>

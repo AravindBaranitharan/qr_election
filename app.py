@@ -613,12 +613,27 @@ def apply_live_state_updates(base_state, payload):
     state = dict(base_state)
     if "total_qr" in payload:
         state["total_qr"] = max(parse_int(payload.get("total_qr"), state.get("total_qr", 0)), 0)
-    if "true_count" in payload:
-        state["true_count"] = max(parse_int(payload.get("true_count"), state.get("true_count", 0)), 0)
     if "next_serial" in payload:
         state["next_serial"] = max(parse_int(payload.get("next_serial"), state.get("next_serial", 1)), 1)
-    if "scanned_serials" in payload:
-        state["scanned_serials"] = normalize_serial_list(payload.get("scanned_serials"))
+
+    scanned_set = set(normalize_serial_list(state.get("scanned_serials", [])))
+    add_serials = normalize_serial_list(payload.get("add_serials"))
+    remove_serials = normalize_serial_list(payload.get("remove_serials"))
+
+    for serial in add_serials:
+        scanned_set.add(serial)
+    for serial in remove_serials:
+        scanned_set.discard(serial)
+
+    remove_range_start = parse_int(payload.get("remove_range_start"), 0)
+    remove_range_end = parse_int(payload.get("remove_range_end"), 0)
+    if remove_range_start > 0 and remove_range_end > 0:
+        lower = min(remove_range_start, remove_range_end)
+        upper = max(remove_range_start, remove_range_end)
+        scanned_set = {serial for serial in scanned_set if not (lower <= serial <= upper)}
+
+    state["scanned_serials"] = sorted(scanned_set)
+    state["true_count"] = len(state["scanned_serials"])
     state["output_dir"] = STATE_OUTPUT_DIR
     state["manifest_file"] = STATE_MANIFEST_PATH
     return state
@@ -1329,14 +1344,18 @@ def database_state_update():
     payload = request.get_json(silent=True) or {}
     with STATE_LOCK:
         state = load_state()
+        before_serials = set(normalize_serial_list(state.get("scanned_serials", [])))
         updated_state = apply_live_state_updates(state, payload)
         saved_state = save_state(updated_state)
+        after_serials = set(normalize_serial_list(saved_state.get("scanned_serials", [])))
     return jsonify(
         {
             "true": True,
             "message": "state updated",
             "storage_mode": state_storage_mode(),
             "state": saved_state,
+            "added_count": len(after_serials - before_serials),
+            "removed_count": len(before_serials - after_serials),
         }
     )
 
